@@ -1,45 +1,79 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readJson } from './src/storage.mjs';
 import { readLatestScan, scanFreshness } from './src/scan-result.mjs';
+import { API_ROUTES, apiError, scanResponse } from './src/api-contract.mjs';
+import { createScanRunner } from './src/scan-runner.mjs';
 
-const root = fileURLToPath(new URL('.', import.meta.url));
-const dataDir = resolve(root, process.env.DATA_DIR ?? 'data');
+const moduleRoot = fileURLToPath(new URL('.', import.meta.url));
 const types = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8' };
-const port = Number(process.env.PORT ?? 8787);
-const host = process.env.HOST ?? '0.0.0.0';
 
-const emptyScan = asOf => ({
-  asOf, provider:'missing', validation:{ ok:false, errors:['尚未完成正式掃描'] }, coverage:{ total:0, dailyBars:0, weeklyBars:0, eligible:0, insufficient:0, details:[] },
-  universe:{ input:0, included:0, excluded:0 }, marketMode:'range', ranked:[], top12:[], top3:[], watch:[], insufficientData:[],
-  release:{ publish:false, failures:['尚未完成正式掃描；不使用示範資料產生推薦'] }
-});
+function sendJson(res, status, body) {
+  res.writeHead(status, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
+  res.end(JSON.stringify(body));
+}
 
-const server = http.createServer(async (req, res) => {
-  try {
-    if (req.url === '/api/scan') {
-      const latest = await readLatestScan(join(dataDir, 'latest-scan.json'));
-      const payload = latest ? { ...latest, freshness:scanFreshness(latest) } : emptyScan(process.env.MARKET_DATE ?? new Date().toISOString().slice(0, 10));
-      res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
-      return res.end(JSON.stringify(payload));
+export function createApp({ root = moduleRoot, dataDir = resolve(root, process.env.DATA_DIR ?? 'data'), runner = createScanRunner({ root, dataDir }), logger = console } = {}) {
+  return http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    try {
+      if (url.pathname === API_ROUTES.scan) {
+        const latest = await readLatestScan(join(dataDir, 'latest-scan.json'));
+        if (latest) return sendJson(res, 200, scanResponse(latest, scanFreshness(latest)));
+        const scan = runner.state();
+        const error = scan.status === 'failed'
+          ? apiError(503, 'LIVE_SCAN_FAILED', 'Official live scan failed; no recommendation data is available', { scan })
+          : apiError(202, 'LIVE_SCAN_PENDING', 'Official live scan is still running; no recommendation data is available yet', { scan });
+        return sendJson(res, error.status, error.body);
+      }
+      if (url.pathname === API_ROUTES.coverage) {
+        const latest = await readLatestScan(join(dataDir, 'latest-scan.json'));
+        if (!latest) {
+          const error = apiError(503, 'COVERAGE_UNAVAILABLE', 'Coverage is unavailable until the official live scan completes', { scan:runner.state() });
+          return sendJson(res, error.status, error.body);
+        }
+        return sendJson(res, 200, { ok:true, dataSource:latest.provider, candidateCount:latest.coverage?.total ?? 0, dailyCoverageCount:latest.coverage?.dailyBars ?? 0, weeklyCoverageCount:latest.coverage?.weeklyBars ?? 0, insufficientData:latest.insufficientData ?? [], coverage:latest.coverage });
+      }
+      if (url.pathname === API_ROUTES.health) {
+        const history = await readJson(join(dataDir, 'scan-history.json'), []);
+        const latest = await readLatestScan(join(dataDir, 'latest-scan.json'));
+        return sendJson(res, 200, { ok:true, engine:'v3.0', scan:runner.state(), scanCount:history.length, dataMode:latest?.provider ?? 'missing', freshness:scanFreshness(latest), release:latest?.release ?? { publish:false, failures:['Official live scan has not completed'] }, coverage:latest?.coverage ?? null });
+      }
+      if (url.pathname.startsWith('/api/')) {
+        const error = apiError(404, 'API_ROUTE_NOT_FOUND', `No API route exists for ${url.pathname}`);
+        logger.error(JSON.stringify({ event:'api_route_not_found', method:req.method, path:url.pathname }));
+        return sendJson(res, error.status, error.body);
+      }
+      const relative = url.pathname === '/' ? 'public/index.html' : `public/${url.pathname.replace(/^\//, '')}`;
+      const path = resolve(root, relative);
+      if (!path.startsWith(resolve(root, 'public'))) throw Object.assign(new Error('Invalid static path'), { statusCode:400 });
+      const data = await readFile(path);
+      res.writeHead(200, { 'content-type':types[extname(path)] || 'application/octet-stream' });
+      return res.end(data);
+    } catch (error) {
+      const status = error.code === 'ENOENT' ? 404 : (error.statusCode ?? 500);
+      logger.error(JSON.stringify({ event:'request_failed', method:req.method, path:url.pathname, status, error:error.message, stack:error.stack }));
+      if (url.pathname.startsWith('/api/')) return sendJson(res, status, apiError(status, status === 404 ? 'API_RESOURCE_NOT_FOUND' : 'INTERNAL_SERVER_ERROR', error.message).body);
+      res.writeHead(status, { 'content-type':'text/plain; charset=utf-8' });
+      return res.end(status === 404 ? 'Not found' : 'Internal server error');
     }
-    if (req.url === '/api/health') {
-      const history = await readJson(join(dataDir, 'scan-history.json'), []);
-      const latest = await readLatestScan(join(dataDir, 'latest-scan.json'));
-      res.writeHead(200, { 'content-type':'application/json; charset=utf-8' });
-      return res.end(JSON.stringify({ ok:true, engine:'v3.0', scanCount:history.length, dataMode:latest?.provider ?? 'none', freshness:scanFreshness(latest), release:latest?.release ?? { publish:false, failures:['尚未產生正式掃描結果'] }, factorSources:latest?.factorSources ?? {}, coverage:latest?.coverage ?? null }));
-    }
-    const path = req.url === '/' ? '/public/index.html' : `/public${req.url}`;
-    const data = await readFile(join(root, path));
-    res.writeHead(200, { 'content-type':types[extname(path)] || 'application/octet-stream' });
-    return res.end(data);
-  } catch (error) {
-    console.error(JSON.stringify({ event:'http_error', path:req.url, error:error.message }));
-    res.writeHead(404);
-    return res.end('Not found');
-  }
-});
+  });
+}
 
-server.listen(port, host, () => console.log(`TW Stock System: http://${host}:${port}`));
+export function startServer() {
+  const root = moduleRoot;
+  const dataDir = resolve(root, process.env.DATA_DIR ?? 'data');
+  const runner = createScanRunner({ root, dataDir });
+  const server = createApp({ root, dataDir, runner });
+  const port = Number(process.env.PORT ?? 8787);
+  const host = process.env.HOST ?? '0.0.0.0';
+  server.listen(port, host, () => {
+    console.log(`TW Stock System: http://${host}:${port}`);
+    if (process.env.AUTO_SCAN !== '0') runner.start();
+  });
+  return server;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) startServer();
