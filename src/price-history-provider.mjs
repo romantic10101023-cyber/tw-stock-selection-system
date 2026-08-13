@@ -1,5 +1,5 @@
 import { fetchOfficialJson } from './live-provider.mjs';
-import { mergeBars, normalizeBar, validateBars } from './ohlcv.mjs';
+import { mergeBars, normalizeOfficialRows, validBar } from './ohlcv.mjs';
 import { aggregateWeeklyBars } from './technical.mjs';
 
 export const HISTORY_MONTHS = 18;
@@ -21,7 +21,7 @@ function parseRocDate(value) {
 const monthKey = ({ year, month }) => `${year}-${String(month).padStart(2, '0')}`;
 
 export async function loadTwseHistory(code, asOf = new Date().toISOString().slice(0, 10), { existingBars = [], months = HISTORY_MONTHS, fetchJson = fetchOfficialJson, logger = console } = {}) {
-  let bars = mergeBars([], existingBars);
+  let bars = mergeBars([], existingBars.filter(bar => validBar(bar, asOf).ok));
   const currentMonth = asOf.slice(0, 7);
   const cachedMonths = new Set(bars.map(bar => bar.date?.slice(0, 7)).filter(Boolean));
   const errors = [];
@@ -32,15 +32,15 @@ export async function loadTwseHistory(code, asOf = new Date().toISOString().slic
       const payload = await fetchJson(TWSE_HISTORY_URL(code, request.year, request.month));
       if (payload?.stat && payload.stat !== 'OK') throw new Error(payload.stat);
       const rows = Array.isArray(payload?.data) ? payload.data : [];
-      bars = mergeBars(bars, rows.map(row => normalizeBar({ date:parseRocDate(row[0]) ?? row[0], open:row[3], high:row[4], low:row[5], close:row[6], volume:row[1] })));
+      const normalized = normalizeOfficialRows({ rows, fields:payload?.fields, code, market:'twse', asOf, logger, dateParser:value => parseRocDate(value) ?? value });
+      bars = mergeBars(bars, normalized.bars);
+      if (normalized.rejected.length) errors.push({ month:key, rejectedRows:normalized.rejected.length });
     } catch (error) {
       errors.push({ month:key, error:error.message });
       logger.error?.(JSON.stringify({ event:'history_fetch_error', market:'twse', code, month:key, error:error.message }));
     }
   }
   bars = bars.filter(bar => bar.date <= asOf);
-  const validation = validateBars(bars, asOf);
-  if (!validation.ok) throw new Error(validation.errors.join('; '));
   return { code, bars, dailyBars:bars.length, weeklyBars:aggregateWeeklyBars(bars).length, source:'live', asOf, errors };
 }
 

@@ -62,7 +62,8 @@ try {
       const history = stock.market === 'tpex'
         ? await loadTpexHistory(stock.code, asOf, { existingBars })
         : await loadTwseHistory(stock.code, asOf, { existingBars });
-      const effective = { ...history, source:history.errors.length ? (existingBars.length ? 'cached' : 'missing') : 'live' };
+      const requestFailed = history.errors.some(entry => entry.error);
+      const effective = { ...history, source:requestFailed ? (existingBars.length ? 'cached' : 'missing') : 'live' };
       historiesByCode[stock.code] = effective;
       await writeHistoryCache(historyCachePath, stock.code, effective, asOf);
     } catch (error) {

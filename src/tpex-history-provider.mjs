@@ -1,5 +1,5 @@
 import { fetchOfficialJson } from './live-provider.mjs';
-import { mergeBars, normalizeBar, validateBars } from './ohlcv.mjs';
+import { mergeBars, normalizeOfficialRows, validBar } from './ohlcv.mjs';
 import { aggregateWeeklyBars } from './technical.mjs';
 import { HISTORY_MONTHS, historyRequestMonths } from './price-history-provider.mjs';
 
@@ -10,14 +10,14 @@ function parseRocDate(value) {
   return match ? `${Number(match[1]) + 1911}-${String(Number(match[2])).padStart(2, '0')}-${String(Number(match[3])).padStart(2, '0')}` : null;
 }
 
-export function parseTpexHistory(payload) {
+export function parseTpexHistory(payload, { code, asOf, logger } = {}) {
   const rows = payload?.tables?.[0]?.data;
   if (!Array.isArray(rows)) return [];
-  return rows.map(row => normalizeBar({ date:parseRocDate(row[0]), open:row[3], high:row[4], low:row[5], close:row[6], volume:row[1] })).filter(bar => bar.date);
+  return normalizeOfficialRows({ rows, fields:payload?.tables?.[0]?.fields, code, market:'tpex', asOf, logger, dateParser:parseRocDate }).bars;
 }
 
 export async function loadTpexHistory(code, asOf = new Date().toISOString().slice(0, 10), { existingBars = [], months = HISTORY_MONTHS, fetchJson = fetchOfficialJson, logger = console } = {}) {
-  let bars = mergeBars([], existingBars);
+  let bars = mergeBars([], existingBars.filter(bar => validBar(bar, asOf).ok));
   const currentMonth = asOf.slice(0, 7);
   const cachedMonths = new Set(bars.map(bar => bar.date?.slice(0, 7)).filter(Boolean));
   const errors = [];
@@ -28,14 +28,15 @@ export async function loadTpexHistory(code, asOf = new Date().toISOString().slic
       const body = new URLSearchParams({ code, date:`${request.year}/${String(request.month).padStart(2, '0')}/01`, response:'json' });
       const payload = await fetchJson(TPEX_HISTORY_URL, { method:'POST', body });
       if (payload?.stat !== 'ok') throw new Error(payload?.stat ?? 'Invalid TPEX response');
-      bars = mergeBars(bars, parseTpexHistory(payload));
+      const table = payload?.tables?.[0];
+      const normalized = normalizeOfficialRows({ rows:table?.data, fields:table?.fields, code, market:'tpex', asOf, logger, dateParser:parseRocDate });
+      bars = mergeBars(bars, normalized.bars);
+      if (normalized.rejected.length) errors.push({ month:key, rejectedRows:normalized.rejected.length });
     } catch (error) {
       errors.push({ month:key, error:error.message });
       logger.error?.(JSON.stringify({ event:'history_fetch_error', market:'tpex', code, month:key, error:error.message }));
     }
   }
   bars = bars.filter(bar => bar.date <= asOf);
-  const validation = validateBars(bars, asOf);
-  if (!validation.ok) throw new Error(validation.errors.join('; '));
   return { code, bars, dailyBars:bars.length, weeklyBars:aggregateWeeklyBars(bars).length, source:'live', asOf, errors };
 }
