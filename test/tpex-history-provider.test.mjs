@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { parseTpexHistory } from '../src/tpex-history-provider.mjs';
 
-test('上櫃歷史資料採獨立來源解析器', () => {
-  const html = '<table><tr><th>日期</th><th>成交股數</th><th>成交金額</th><th>開盤</th><th>最高</th><th>最低</th><th>收盤</th></tr><tr><td>115/08/13</td><td>1,200</td><td>100</td><td>80</td><td>84</td><td>79</td><td>82</td></tr></table>';
-  assert.match(html, /115\/08\/13/);
-  assert.equal(html.includes('<tr>'), true);
+test('TPEx official JSON rows are normalized into OHLCV bars', () => {
+  const payload = { stat:'ok', tables:[{ data:[['115/08/13','1,200','100,000','80','84','79','82','+2','500']] }] };
+  assert.deepEqual(parseTpexHistory(payload), [{ date:'2026-08-13', open:80, high:84, low:79, close:82, volume:1200 }]);
 });

@@ -8,7 +8,7 @@ const requiredFiles = ['Dockerfile', '.env.example', 'config/schedule.json', 'do
 const missing = [];
 for (const file of requiredFiles) { try { await readFile(join(root, file)); } catch { missing.push(file); } }
 const schedule = JSON.parse(await readFile(join(root, 'config/schedule.json'), 'utf8'));
-const sample = { provider: 'live', validation: { ok: true }, coverage: { total: 1, dailyBars: 1, weeklyBars: 1 }, factorSources: { revenue: { ok: true }, income: { ok: true }, pe: { ok: true }, margin: { ok: true }, institutions: { ok: true } } };
+const sample = { provider: 'live', validation: { ok: true }, coverage: { total: 1, dailyBars: 1, weeklyBars: 1, eligible: 1 }, scoredIneligible:0, factorSources: { revenue: { ok: true }, income: { ok: true }, pe: { ok: true }, margin: { ok: true }, institutions: { ok: true } } };
 const checks = { requiredFiles: missing.length === 0, schedule: schedule.timezone === 'Asia/Taipei' && schedule.dailyScan === '23:30', bars: schedule.minDailyBars >= 120 && schedule.minWeeklyBars >= 60, releaseGate: releaseGate(sample, { officialRequired: true }).publish };
 const ok = Object.values(checks).every(Boolean);
 console.log(JSON.stringify({ ok, checks, missing }, null, 2));

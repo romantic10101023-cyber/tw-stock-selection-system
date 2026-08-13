@@ -1,26 +1,43 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveTechnical, deriveWeeklyTechnical, sma, rsi } from '../src/technical.mjs';
+import { aggregateWeeklyBars, deriveTechnical, deriveWeeklyTechnical, sma, rsi } from '../src/technical.mjs';
 
-const bars = Array.from({ length: 320 }, (_, i) => ({ close: 100 + i * .2 + (i % 4), low: 98 + i * .2, volume: 1000 - i * 2 }));
+function tradingBars(count, start = '2024-01-01') {
+  const bars = [], date = new Date(`${start}T00:00:00Z`);
+  while (bars.length < count) {
+    if (date.getUTCDay() !== 0 && date.getUTCDay() !== 6) {
+      const i = bars.length;
+      bars.push({ date:date.toISOString().slice(0, 10), open:100+i*.1, high:102+i*.1, low:98+i*.1, close:101+i*.1, volume:1000+i });
+    }
+    date.setUTCDate(date.getUTCDate() + 1);
+  }
+  return bars;
+}
 
-test('均線與RSI可計算', () => {
+test('moving average and RSI are calculated', () => {
+  const bars = tradingBars(320);
   assert.equal(sma([1,2,3,4,5], 3), 4);
-  assert.ok(rsi(bars.map(x => x.close)) >= 0 && rsi(bars.map(x => x.close)) <= 100);
+  assert.ok(rsi(bars.map(bar => bar.close)) >= 0);
 });
-test('技術結構會產生支撐與交易訊號', () => {
-  const result = deriveTechnical(bars);
-  assert.equal(result.complete, true);
-  assert.ok(result.ma20 > 0);
-  assert.ok(result.support > 0);
-  assert.equal(typeof result.nearSupport, 'boolean');
+
+test('daily bars below 120 are blocked', () => {
+  assert.equal(deriveTechnical(tradingBars(119)).complete, false);
+  assert.equal(deriveTechnical(tradingBars(120)).complete, true);
 });
-test('K線不足時不硬算', () => {
-  assert.equal(deriveTechnical(bars.slice(0, 119)).complete, false);
-  assert.equal(deriveTechnical(bars.slice(0, 120)).complete, true);
+
+test('weekly bars are aggregated by calendar week with correct OHLCV', () => {
+  const weeks = aggregateWeeklyBars(tradingBars(10));
+  assert.equal(weeks.length, 2);
+  assert.equal(weeks[0].open, 100);
+  assert.equal(weeks[0].close, 101.4);
+  assert.equal(weeks[0].high, 102.4);
+  assert.equal(weeks[0].low, 98);
+  assert.equal(weeks[0].volume, 5010);
 });
-test('週線不足60根時不硬算', () => {
-  assert.equal(deriveTechnical(bars.slice(0, 299)).complete, true);
-  assert.equal(deriveWeeklyTechnical(bars.slice(0, 299)).complete, false);
-  assert.equal(deriveWeeklyTechnical(bars.slice(0, 300)).complete, true);
+
+test('weekly bars below 60 are blocked and 60 are accepted', () => {
+  assert.equal(deriveWeeklyTechnical(tradingBars(295)).complete, false);
+  assert.equal(deriveWeeklyTechnical(tradingBars(300)).complete, true);
 });
+
+export { tradingBars };

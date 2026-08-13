@@ -81,6 +81,7 @@ export function scoreTechnical(stock) {
 }
 
 export function analyze(stock, marketMode = 'range') {
+  if (stock.eligibility && !stock.eligibility.eligible) throw new Error(`${stock.code} is not eligible for scoring: ${stock.eligibility.reasons.join('; ')}`);
   const quality = dataQuality(stock);
   const trade = tradability(stock);
   const valuation = scoreValuation(stock);

@@ -1,23 +1,50 @@
-function complete(stock, fields) {
-  return fields.every(field => {
-    const value = stock[field];
-    return value !== null && value !== undefined && Number.isFinite(Number(value));
-  });
+import { MIN_DAILY_BARS, MIN_WEEKLY_BARS } from './technical.mjs';
+
+const finiteFields = (stock, fields) => fields.every(field => stock[field] !== null && stock[field] !== undefined && Number.isFinite(Number(stock[field])));
+export const BASIC_FIELDS = ['price', 'eps4q', 'revenueGrowth4q', 'volume5', 'foreign20', 'margin20'];
+
+export function scoringEligibility(stock) {
+  const reasons = [];
+  const dailyBars = Number(stock.dailyBars ?? 0);
+  const weeklyBars = Number(stock.weeklyBars ?? 0);
+  const missingBasicFields = BASIC_FIELDS.filter(field => !finiteFields(stock, [field]));
+  if (dailyBars < MIN_DAILY_BARS) reasons.push(`日線不足：${dailyBars}/${MIN_DAILY_BARS}`);
+  if (weeklyBars < MIN_WEEKLY_BARS) reasons.push(`週線不足：${weeklyBars}/${MIN_WEEKLY_BARS}`);
+  if (missingBasicFields.length) reasons.push(`基本資料不足：${missingBasicFields.join(', ')}`);
+  if (!stock.technical?.complete || !stock.weeklyTechnical?.complete) reasons.push('技術指標未完成');
+  return { eligible:reasons.length === 0, reasons, dailyBars, weeklyBars, missingBasicFields };
+}
+
+export function partitionByCoverage(stocks = []) {
+  const eligible = [], insufficient = [];
+  for (const stock of stocks) {
+    const eligibility = scoringEligibility(stock);
+    const row = { ...stock, eligibility };
+    (eligibility.eligible ? eligible : insufficient).push(row);
+  }
+  return { eligible, insufficient };
 }
 
 export function coverageReport(stocks = []) {
-  const total = stocks.length;
-  const count = predicate => stocks.filter(predicate).length;
+  const details = stocks.map(stock => {
+    const eligibility = scoringEligibility(stock);
+    return { code:stock.code, name:stock.name, market:stock.market, dailyBars:eligibility.dailyBars, weeklyBars:eligibility.weeklyBars, basicDataComplete:eligibility.missingBasicFields.length === 0, eligible:eligibility.eligible, reasons:eligibility.reasons };
+  });
+  const total = details.length;
+  const count = predicate => details.filter(predicate).length;
   const report = {
     total,
-    price: count(stock => complete(stock, ['price'])),
-    fundamentals: count(stock => complete(stock, ['eps4q', 'revenueGrowth4q'])),
-    valuation: count(stock => complete(stock, ['pe', 'fairValue']) || Number(stock.eps4q) > 0),
-    chips: count(stock => complete(stock, ['foreign20', 'margin20'])),
-    dailyBars: count(stock => stock.technicalSource === 'live' || stock.technical?.complete === true),
-    weeklyBars: count(stock => stock.weeklyTechnical?.complete === true)
+    price:stocks.filter(stock => finiteFields(stock, ['price'])).length,
+    fundamentals:stocks.filter(stock => finiteFields(stock, ['eps4q', 'revenueGrowth4q'])).length,
+    valuation:stocks.filter(stock => finiteFields(stock, ['pe', 'fairValue']) || Number(stock.eps4q) > 0).length,
+    chips:stocks.filter(stock => finiteFields(stock, ['foreign20', 'margin20'])).length,
+    dailyBars:count(row => row.dailyBars >= MIN_DAILY_BARS),
+    weeklyBars:count(row => row.weeklyBars >= MIN_WEEKLY_BARS),
+    eligible:count(row => row.eligible),
+    insufficient:count(row => !row.eligible),
+    details
   };
-  report.percent = Object.fromEntries(Object.entries(report).filter(([key]) => key !== 'total').map(([key, value]) => [key, total ? Math.round(value / total * 1000) / 10 : 0]));
-  report.ok = total > 0 && report.dailyBars === total && report.weeklyBars === total;
+  report.percent = Object.fromEntries(['price','fundamentals','valuation','chips','dailyBars','weeklyBars','eligible'].map(key => [key, total ? Math.round(report[key] / total * 1000) / 10 : 0]));
+  report.ok = total > 0 && report.eligible > 0;
   return report;
 }

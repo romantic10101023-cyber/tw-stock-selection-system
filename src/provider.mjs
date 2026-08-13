@@ -15,8 +15,11 @@ export function createProvider({ liveLoader, cachedLoader, demoLoader }) {
           if (cached?.length) return { status: SOURCE_STATUS.CACHED, stocks: cached.map(x => normalizeStock({...x, source: SOURCE_STATUS.CACHED, asOf})) };
         } catch (error) { console.warn(`cache provider unavailable: ${error.message}`); }
       }
-      const demo = await demoLoader(asOf);
-      return { status: SOURCE_STATUS.DEMO, stocks: demo.map(x => normalizeStock({...x, source: SOURCE_STATUS.DEMO, asOf})) };
+      if (demoLoader) {
+        const demo = await demoLoader(asOf);
+        return { status: SOURCE_STATUS.DEMO, stocks: demo.map(x => normalizeStock({...x, source: SOURCE_STATUS.DEMO, asOf})) };
+      }
+      return { status: SOURCE_STATUS.MISSING, stocks: [] };
     }
   };
 }
