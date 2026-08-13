@@ -34,7 +34,7 @@ export function createApp({ root = moduleRoot, dataDir = resolve(root, process.e
           const error = apiError(503, 'COVERAGE_UNAVAILABLE', 'Coverage is unavailable until the official live scan completes', { scan:runner.state() });
           return sendJson(res, error.status, error.body);
         }
-        return sendJson(res, 200, { ok:true, dataSource:latest.provider, candidateCount:latest.coverage?.total ?? 0, dailyCoverageCount:latest.coverage?.dailyBars ?? 0, weeklyCoverageCount:latest.coverage?.weeklyBars ?? 0, insufficientData:latest.insufficientData ?? [], coverage:latest.coverage });
+        return sendJson(res, 200, { ok:true, dataSource:latest.provider, candidateCount:latest.coverage?.total ?? 0, dailyCoverageCount:latest.coverage?.dailyBars ?? 0, weeklyCoverageCount:latest.coverage?.weeklyBars ?? 0, insufficientData:latest.insufficientData ?? [], insufficientByReason:latest.historyDiagnostics?.insufficientByReason ?? {}, historyDiagnostics:latest.historyDiagnostics ?? null, coverage:latest.coverage });
       }
       if (url.pathname === API_ROUTES.health) {
         const history = await readJson(join(dataDir, 'scan-history.json'), []);

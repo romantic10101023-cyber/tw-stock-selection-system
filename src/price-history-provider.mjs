@@ -25,7 +25,8 @@ export async function loadTwseHistory(code, asOf = new Date().toISOString().slic
   const currentMonth = asOf.slice(0, 7);
   const cachedMonths = new Set(bars.map(bar => bar.date?.slice(0, 7)).filter(Boolean));
   const errors = [];
-  for (const request of monthsBefore(asOf, months)) {
+  const requests = monthsBefore(asOf, months).filter(request => !cachedMonths.has(monthKey(request)) || monthKey(request) === currentMonth);
+  for (const request of requests) {
     const key = monthKey(request);
     if (cachedMonths.has(key) && key !== currentMonth) continue;
     try {
@@ -41,7 +42,7 @@ export async function loadTwseHistory(code, asOf = new Date().toISOString().slic
     }
   }
   bars = bars.filter(bar => bar.date <= asOf);
-  return { code, bars, dailyBars:bars.length, weeklyBars:aggregateWeeklyBars(bars).length, source:'live', asOf, errors };
+  return { code, bars, dailyBars:bars.length, weeklyBars:aggregateWeeklyBars(bars).length, requestedMonths:requests.length, source:'live', asOf, errors };
 }
 
 export function historyRequestMonths(asOf = new Date().toISOString().slice(0, 10), count = HISTORY_MONTHS) { return monthsBefore(asOf, count); }

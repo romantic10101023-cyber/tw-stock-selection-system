@@ -12,12 +12,10 @@ import { loadOfficialMarket } from '../src/market-provider.mjs';
 import { appendMarketSnapshot, historyInputs, readMarketHistory } from '../src/market-history.mjs';
 import { snapshotRecommendations } from '../src/outcome.mjs';
 import { applyTechnicalBatch } from '../src/technical-enrich.mjs';
-import { loadTwseHistory } from '../src/price-history-provider.mjs';
-import { loadTpexHistory } from '../src/tpex-history-provider.mjs';
 import { loadOfficialFactorsDetailed } from '../src/factor-loader.mjs';
 import { enrichBatch } from '../src/enrich.mjs';
 import { coverageReport, partitionByCoverage } from '../src/data-coverage.mjs';
-import { getCachedHistory, readHistoryCache, writeHistoryCache } from '../src/history-cache.mjs';
+import { groupInsufficientReasons, hydrateOfficialHistories, PRODUCTION_SMOKE_SYMBOLS } from '../src/history-pipeline.mjs';
 import { acquireScanLock, releaseScanLock } from '../src/scan-lock.mjs';
 import { releaseGate } from '../src/release-gate.mjs';
 
@@ -44,37 +42,18 @@ try {
   }
   const stocksWithFactors = enrichBatch(loaded.stocks, factorMap);
 
-  const historyCachePath = pathFor('history-cache.json');
-  const historyCache = await readHistoryCache(historyCachePath);
-  const historiesByCode = {};
-  for (const stock of stocksWithFactors) {
-    const cached = await getCachedHistory(historyCachePath, stock.code, asOf);
-    if (cached) historiesByCode[stock.code] = cached;
-  }
-
   const historyLimit = Math.max(1, Number(process.env.HISTORY_LIMIT ?? 20));
-  const refreshQueue = [...stocksWithFactors]
-    .sort((a, b) => (historyCache[a.code]?.bars?.length ?? 0) - (historyCache[b.code]?.bars?.length ?? 0))
-    .slice(0, historyLimit);
-  for (const stock of refreshQueue) {
-    const existingBars = historiesByCode[stock.code]?.bars ?? [];
-    try {
-      const history = stock.market === 'tpex'
-        ? await loadTpexHistory(stock.code, asOf, { existingBars })
-        : await loadTwseHistory(stock.code, asOf, { existingBars });
-      const requestFailed = history.errors.some(entry => entry.error);
-      const effective = { ...history, source:requestFailed ? (existingBars.length ? 'cached' : 'missing') : 'live' };
-      historiesByCode[stock.code] = effective;
-      await writeHistoryCache(historyCachePath, stock.code, effective, asOf);
-    } catch (error) {
-      console.error(JSON.stringify({ event:'history_unavailable', code:stock.code, market:stock.market, error:error.message }));
-    }
-  }
+  const priorityCodes = [...new Set([...PRODUCTION_SMOKE_SYMBOLS, ...(process.env.HISTORY_PRIORITY_CODES ?? '').split(',').map(code => code.trim()).filter(Boolean)])];
+  const { historiesByCode, diagnostics:historyDiagnostics } = await hydrateOfficialHistories(stocksWithFactors, { cachePath:pathFor('history-cache.json'), asOf, limit:historyLimit, priorityCodes });
 
   const stocksWithTechnical = applyTechnicalBatch(stocksWithFactors, historiesByCode);
   const universe = filterUniverse(stocksWithTechnical);
   const coverage = coverageReport(universe.included);
   const partition = partitionByCoverage(universe.included);
+  historyDiagnostics.validDailyCount = coverage.dailyBars;
+  historyDiagnostics.validWeeklyCount = coverage.weeklyBars;
+  historyDiagnostics.insufficientByReason = groupInsufficientReasons(partition.insufficient);
+  console.log(JSON.stringify({ event:'history_pipeline_summary', ...historyDiagnostics }));
 
   const marketHistoryPath = pathFor('market-history.json');
   let marketHistory = await readMarketHistory(marketHistoryPath);
@@ -88,7 +67,7 @@ try {
   const market = classifyMarket(historyInputs(marketHistory));
   const lists = buildLists(partition.eligible, market.mode);
   const result = {
-    batchId, runAt:new Date().toISOString(), asOf, provider:loaded.status, factorSources, validation, coverage,
+    batchId, runAt:new Date().toISOString(), asOf, provider:loaded.status, factorSources, validation, coverage, historyDiagnostics,
     universe:universe.counts, market, marketMode:market.mode, insufficientData:partition.insufficient.map(stock => ({ code:stock.code, name:stock.name, market:stock.market, ...stock.eligibility })),
     scoredIneligible:0, ...lists
   };

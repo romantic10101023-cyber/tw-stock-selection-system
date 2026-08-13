@@ -21,7 +21,11 @@ export async function loadTpexHistory(code, asOf = new Date().toISOString().slic
   const currentMonth = asOf.slice(0, 7);
   const cachedMonths = new Set(bars.map(bar => bar.date?.slice(0, 7)).filter(Boolean));
   const errors = [];
-  for (const request of historyRequestMonths(asOf, months)) {
+  const requests = historyRequestMonths(asOf, months).filter(request => {
+    const key = `${request.year}-${String(request.month).padStart(2, '0')}`;
+    return !cachedMonths.has(key) || key === currentMonth;
+  });
+  for (const request of requests) {
     const key = `${request.year}-${String(request.month).padStart(2, '0')}`;
     if (cachedMonths.has(key) && key !== currentMonth) continue;
     try {
@@ -38,5 +42,5 @@ export async function loadTpexHistory(code, asOf = new Date().toISOString().slic
     }
   }
   bars = bars.filter(bar => bar.date <= asOf);
-  return { code, bars, dailyBars:bars.length, weeklyBars:aggregateWeeklyBars(bars).length, source:'live', asOf, errors };
+  return { code, bars, dailyBars:bars.length, weeklyBars:aggregateWeeklyBars(bars).length, requestedMonths:requests.length, source:'live', asOf, errors };
 }

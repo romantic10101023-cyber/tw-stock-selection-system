@@ -11,6 +11,7 @@ export function scanResponse(scan, freshness) {
     dailyCoverageCount:scan.coverage?.dailyBars ?? 0,
     weeklyCoverageCount:scan.coverage?.weeklyBars ?? 0,
     coverage:scan.coverage,
+    historyDiagnostics:scan.historyDiagnostics,
     insufficientData:scan.insufficientData ?? [],
     recommendations:{ top3:scan.top3 ?? [], top12:scan.top12 ?? [], watch:scan.watch ?? [] },
     ranked:scan.ranked ?? [],
