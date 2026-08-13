@@ -2,7 +2,7 @@ export const SOURCE_STATUS = { LIVE: 'live', CACHED: 'cached', DEMO: 'demo', MIS
 
 export function normalizeStock(raw = {}) {
   return {
-    code: String(raw.code ?? '').padStart(4, '0'),
+    code: String(raw.code ?? '').trim().toUpperCase().replace(/[\s-]+/g, '').padStart(4, '0'),
     name: raw.name ?? '未命名',
     sector: raw.sector ?? '未分類',
     market: raw.market ?? null,
@@ -12,6 +12,12 @@ export function normalizeStock(raw = {}) {
     industryCode:raw.industryCode ?? null,
     isCommonStock:raw.isCommonStock === true,
     isEtf:raw.isEtf === true,
+    isFund:raw.isFund === true,
+    isEtn:raw.isEtn === true,
+    isReit:raw.isReit === true,
+    isWarrant:raw.isWarrant === true,
+    isDepositaryReceipt:raw.isDepositaryReceipt === true,
+    isPreferredShare:raw.isPreferredShare === true,
     isFinancial:raw.isFinancial === true,
     isConstruction:raw.isConstruction === true,
     exclusionReason:raw.exclusionReason ?? null,

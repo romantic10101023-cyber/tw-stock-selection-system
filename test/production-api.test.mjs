@@ -61,3 +61,15 @@ test('frontend scan path matches the backend route contract', async () => {
   assert.equal(path, API_ROUTES.scan);
   assert.doesNotMatch(source, /localhost|127\.0\.0\.1/);
 });
+
+test('health exposes persistent worker progress', t => withServer(t, async ({ base, dataDir }) => {
+  await writeFile(join(dataDir, 'history-queue.json'), JSON.stringify({ total:100, processed:['2330'], pending:['6488'], currentBatch:2, lastProgressAt:'2026-08-14T00:00:00Z' }));
+  await writeFile(join(dataDir, 'scan.lock'), JSON.stringify({ pid:123, startedAt:'2026-08-14T00:00:00Z' }));
+  const response = await fetch(`${base}${API_ROUTES.health}`);
+  const body = await response.json();
+  assert.equal(body.scan.queueTotal, 100);
+  assert.equal(body.scan.queueProcessed, 1);
+  assert.equal(body.scan.queueRemaining, 1);
+  assert.equal(body.scan.currentBatch, 2);
+  assert.equal(body.scan.workerLocked, true);
+}));

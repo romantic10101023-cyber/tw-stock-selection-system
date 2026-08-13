@@ -30,13 +30,13 @@ export async function fetchOfficial(url, { responseType = 'json', timeoutMs = 15
         body,
         signal: controller.signal,
         headers: {
-          accept:responseType === 'json' ? 'application/json' : 'text/html,text/plain',
+          accept:responseType === 'json' ? 'application/json' : 'text/html,text/plain,application/octet-stream',
           'user-agent':'TW-Stock-System/3.0',
           ...(body instanceof URLSearchParams ? { 'content-type':'application/x-www-form-urlencoded;charset=UTF-8' } : {})
         }
       });
       if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
-      return responseType === 'json' ? await response.json() : await response.text();
+      return responseType === 'json' ? await response.json() : responseType === 'buffer' ? await response.arrayBuffer() : await response.text();
     } catch (error) {
       lastError = error;
       logger.error?.(JSON.stringify({ event:'official_api_error', url, attempt, attempts, error:error.message }));
@@ -50,6 +50,7 @@ export async function fetchOfficial(url, { responseType = 'json', timeoutMs = 15
 
 export const fetchOfficialJson = (url, options) => fetchOfficial(url, { ...options, responseType:'json' });
 export const fetchOfficialText = (url, options) => fetchOfficial(url, { ...options, responseType:'text' });
+export const fetchOfficialBuffer = (url, options) => fetchOfficial(url, { ...options, responseType:'buffer' });
 
 function mapTwse(row, asOf) {
   return normalizeStock({ code:row.Code, name:row.Name, market:'twse', price:number(row.ClosingPrice), volume5:number(row.TradeVolume) / 1000, asOf, dataDate:asOf, source:SOURCE_STATUS.LIVE, sourceRefs:[TWSE_URL] });
@@ -65,7 +66,7 @@ export async function loadOfficialQuotes(asOf) {
   const rows = [
     ...(Array.isArray(twse) ? twse.map(row => mapTwse(row, asOf)) : []),
     ...(Array.isArray(tpex) ? tpex.map(row => mapTpex(row, asOf)) : [])
-  ].filter(stock => /^\d{4}$/.test(stock.code) && Number.isFinite(stock.price));
+  ].filter(stock => /^[0-9A-Z-]{4,12}$/i.test(stock.code) && Number.isFinite(stock.price));
   if (!rows.length) throw new Error('Official TWSE/TPEX quote APIs returned no valid stocks');
   return rows;
 }

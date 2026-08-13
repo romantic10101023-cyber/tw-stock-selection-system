@@ -19,7 +19,8 @@ function render(data) {
   document.querySelector('#provider').textContent = data.dataSource ?? data.provider ?? 'missing';
   document.querySelector('#freshness').textContent = data.freshness?.fresh === false ? '已過期' : '有效';
   document.querySelector('#bars-coverage').textContent = `${data.dailyCoverageCount ?? coverage.dailyBars ?? 0}／${data.weeklyCoverageCount ?? coverage.weeklyBars ?? 0} 檔`;
-  document.querySelector('#release-status').textContent = data.release?.publish ? '允許發布' : '暫停發布';
+  const queueIncomplete = data.universe?.queueComplete === false;
+  document.querySelector('#release-status').textContent = data.release?.publish ? '正式發布' : queueIncomplete ? '完整普通股歷史仍未掃描完成' : '暫停發布';
   document.querySelector('#top3').innerHTML = top3.length ? top3.map(card).join('') : '<div class="card">目前沒有同時符合完整進場條件的標的。</div>';
   document.querySelector('#top12').innerHTML = '<div class="row head"><span>排名</span><span>股票</span><span>估值</span><span>分數</span><span>狀態</span><span>風報比</span></div>' + top12.map((stock, index) => `<div class="row"><span>${index + 1}</span><span class="stock"><strong>${stock.name}</strong><span>${stock.code}</span></span><span>${stock.valuation.label}</span><span class="score">${stock.total}</span><span class="${statusClass(stock.status)}">${stock.status}</span><span>1:${stock.rr.toFixed(1)}</span></div>`).join('');
   document.querySelector('#watch').innerHTML = watch.map(stock => `<div class="watch-item"><b>${stock.code} ${stock.name}</b><span class="${statusClass(stock.status)}">${stock.status} · ${stock.total}分</span></div>`).join('') || '<span class="muted">目前沒有觀察標的</span>';
@@ -48,6 +49,7 @@ async function loadDashboard() {
     }
     document.querySelector('#load-error')?.remove();
     render(payload);
+    if (payload.universe?.queueComplete === false) setTimeout(loadDashboard, 15000);
   } catch (error) {
     showError(error.message);
   }

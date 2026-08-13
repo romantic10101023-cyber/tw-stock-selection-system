@@ -18,7 +18,7 @@ import { coverageReport, missingFundamentalFields, partitionByCoverage } from '.
 import { groupInsufficientReasons, hydrateOfficialHistories, PRODUCTION_SMOKE_SYMBOLS } from '../src/history-pipeline.mjs';
 import { acquireScanLock, releaseScanLock } from '../src/scan-lock.mjs';
 import { releaseGate } from '../src/release-gate.mjs';
-import { classifyQuotes, loadOfficialSecurityMaster } from '../src/security-master-provider.mjs';
+import { classifyQuotes, loadOfficialSecurityMaster, SECURITY_MASTER_URLS } from '../src/security-master-provider.mjs';
 
 const asOf = process.env.MARKET_DATE ?? new Date().toISOString().slice(0, 10);
 const dataDir = process.env.DATA_DIR ?? 'data';
@@ -37,6 +37,14 @@ try {
   const classifiedStocks = classifyQuotes(loaded.stocks, securityMaster);
   if (loaded.status === 'live') await writeQuoteCache(quoteCachePath, classifiedStocks, asOf);
   const baseUniverse = filterUniverse(classifiedStocks);
+  baseUniverse.counts.officialEtfCount = securityMaster.officialEtfSymbols.length;
+  baseUniverse.counts.excludedEtfSymbols = baseUniverse.excluded.filter(stock => stock.isEtf || stock.isFund || stock.isEtn || stock.isReit).map(stock => stock.code);
+  baseUniverse.counts.excludedEtfNames = baseUniverse.excluded.filter(stock => stock.isEtf || stock.isFund || stock.isEtn || stock.isReit).map(stock => stock.name);
+  baseUniverse.counts.classificationSource = Object.values(SECURITY_MASTER_URLS ?? {});
+  const includedCodes = new Set(baseUniverse.included.map(stock => stock.code));
+  const leakedOfficialProducts = securityMaster.officialEtfSymbols.filter(code => includedCodes.has(code));
+  const invalidIncluded = baseUniverse.included.filter(stock => stock.isEtf || stock.isFund || stock.isEtn || stock.isReit || stock.isFinancial || stock.isConstruction);
+  if (leakedOfficialProducts.length || invalidIncluded.length) throw new Error(`Universe classification consistency failed: ${[...leakedOfficialProducts, ...invalidIncluded.map(stock => stock.code)].join(',')}`);
 
   let factorMap = {}, factorSources = {};
   if (baseUniverse.included.length) {
@@ -48,7 +56,7 @@ try {
 
   const historyBatchSize = Math.max(8, Number(process.env.HISTORY_BATCH_SIZE ?? 10));
   const priorityCodes = [...new Set([...PRODUCTION_SMOKE_SYMBOLS, ...(process.env.HISTORY_PRIORITY_CODES ?? '').split(',').map(code => code.trim()).filter(Boolean)])];
-  const { historiesByCode, diagnostics:historyDiagnostics } = await hydrateOfficialHistories(stocksWithFactors, { cachePath:pathFor('history-cache.json'), queuePath:pathFor('history-queue.json'), asOf, batchSize:historyBatchSize, priorityCodes });
+  const { historiesByCode, diagnostics:historyDiagnostics, checkpoint } = await hydrateOfficialHistories(stocksWithFactors, { cachePath:pathFor('history-cache.json'), queuePath:pathFor('history-queue.json'), asOf, batchSize:historyBatchSize, priorityCodes });
 
   const stocksWithTechnical = applyTechnicalBatch(stocksWithFactors, historiesByCode);
   const universe = { included:stocksWithTechnical, excluded:baseUniverse.excluded, counts:baseUniverse.counts };
@@ -70,7 +78,7 @@ try {
     console.error(JSON.stringify({ event:'market_history_error', error:error.message }));
   }
   const market = classifyMarket(historyInputs(marketHistory));
-  const queueComplete = historyDiagnostics.historyQueueRemaining === 0;
+  const queueComplete = historyDiagnostics.historyQueueRemaining === 0 && checkpoint.finalized === true;
   const lists = queueComplete ? buildLists(partition.eligible, market.mode) : { ranked:[], top12:[], top3:[], watch:[] };
   const result = {
     batchId, runAt:new Date().toISOString(), asOf, provider:loaded.status, factorSources, validation, coverage, historyDiagnostics,

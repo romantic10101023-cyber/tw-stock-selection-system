@@ -50,9 +50,14 @@ export async function hydrateOfficialHistories(stocks, {
   }
 
   const signature = universeKey(stocks);
+  const validCachedCodes = stocks.filter(stock => {
+    const history = historiesByCode[stock.code];
+    return (history?.bars?.length ?? 0) >= MIN_DAILY_BARS && aggregateWeeklyBars(history.bars).length >= MIN_WEEKLY_BARS;
+  }).map(stock => stock.code);
+  const validCachedSet = new Set(validCachedCodes);
   let checkpoint = await readQueue(queuePath);
   if (!checkpoint || checkpoint.asOf !== asOf) {
-    checkpoint = { version:1, asOf, universeKey:signature, total:stocks.length, pending:selectHistoryRefreshQueue(stocks, cache, stocks.length, priorityCodes).map(stock => stock.code), processed:[], succeeded:[], failed:[] };
+    checkpoint = { version:1, asOf, universeKey:signature, total:stocks.length, currentBatch:0, pending:selectHistoryRefreshQueue(stocks.filter(stock => !validCachedSet.has(stock.code)), cache, stocks.length, priorityCodes).map(stock => stock.code), processed:[...validCachedCodes], succeeded:[...validCachedCodes], failed:[], lastProgressAt:new Date().toISOString() };
     await writeQueue(queuePath, checkpoint);
   } else if (checkpoint.universeKey !== signature) {
     const active = new Set(stocks.map(stock => stock.code));
@@ -68,6 +73,9 @@ export async function hydrateOfficialHistories(stocks, {
     await writeQueue(queuePath, checkpoint);
   }
   const byCode = new Map(stocks.map(stock => [stock.code, stock]));
+  const pendingAtBatchStart = checkpoint.pending.length;
+  checkpoint.currentBatch = Number(checkpoint.currentBatch ?? 0) + 1;
+  await writeQueue(queuePath, checkpoint);
   const queue = (queuePath ? checkpoint.pending : selectHistoryRefreshQueue(stocks, cache, batchSize, priorityCodes).map(stock => stock.code))
     .slice(0, Math.max(1, batchSize)).map(code => byCode.get(code)).filter(Boolean);
   const diagnostics = {
@@ -113,6 +121,7 @@ export async function hydrateOfficialHistories(stocks, {
       if (!checkpoint.processed.includes(stock.code)) checkpoint.processed.push(stock.code);
       const target = succeeded ? 'succeeded' : 'failed';
       if (!checkpoint[target].includes(stock.code)) checkpoint[target].push(stock.code);
+      checkpoint.lastProgressAt = new Date().toISOString();
       await writeQueue(queuePath, checkpoint);
     }
   }
@@ -120,5 +129,8 @@ export async function hydrateOfficialHistories(stocks, {
   diagnostics.historyQueueRemaining = checkpoint.pending.length;
   diagnostics.historySuccessCount = checkpoint.succeeded.length;
   diagnostics.historyFailureCount = checkpoint.failed.length;
+  checkpoint.finalized = pendingAtBatchStart === 0;
+  if (!checkpoint.pending.length) checkpoint.completedAt ??= new Date().toISOString();
+  await writeQueue(queuePath, checkpoint);
   return { historiesByCode, diagnostics, checkpoint };
 }
