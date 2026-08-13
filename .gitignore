@@ -4,4 +4,5 @@ data/quotes-cache.json
 data/market-history.json
 data/recommendation-history.json
 data/history-cache.json
+data/history-queue.json
 data/scan.lock

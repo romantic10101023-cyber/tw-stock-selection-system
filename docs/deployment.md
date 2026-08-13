@@ -4,7 +4,7 @@
 
 1. 將 Railway Volume 掛載到例如 `/app/data`。
 2. 設定 `DATA_DIR=/app/data`，讓行情、歷史 K 線與掃描快取跨部署保留。
-3. 設定 `HISTORY_LIMIT=20`（或依工作執行時間調整），每次掃描優先補齊快取最少的股票。
+3. 設定 `HISTORY_BATCH_SIZE=10`。正式掃描會用持久化佇列分批涵蓋完整候選池，保留已驗證快取，並在每檔完成後寫入 checkpoint；不得用 `HISTORY_LIMIT` 截斷股票池。
 4. 設定 `AUTO_SCAN=1`（預設值）。`npm start` 啟動 HTTP server 後會在背景執行正式掃描，不會阻塞 Railway health check。
 5. 掃描期間 `/api/scan` 回傳 HTTP 202 與 JSON 原因；完成後回傳正式推薦契約。`/api/coverage` 提供逐檔覆蓋資訊，`/api/health` 提供背景掃描程序狀態。
 

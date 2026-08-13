@@ -1,27 +1,27 @@
 const finite = value => Number.isFinite(Number(value)) ? Number(value) : undefined;
+const availability = (value, source, reason) => value === undefined ? { available:false, source, reason } : { available:true, source };
 
 export function enrichStock(stock, factors = {}) {
-  const revenue = factors.revenue ?? {};
-  const income = factors.income ?? {};
-  const valuation = factors.valuation ?? {};
-  const chips = factors.chips ?? {};
+  const revenue = factors.revenue ?? {}, income = factors.income ?? {}, valuation = factors.valuation ?? {}, chips = factors.chips ?? {};
+  const reportedEps = finite(income.reportedEps);
+  const revenueYoY = finite(revenue.revenueYoY);
+  const foreignNetDaily = finite(chips.foreignNetDaily);
+  const marginBalanceChangeDaily = finite(chips.marginBalanceChangeDaily);
   return {
     ...stock,
-    revenueGrowth4q: finite(revenue.revenueYoY) ?? stock.revenueGrowth4q,
-    eps4q: finite(income.eps) ?? stock.eps4q,
-    grossMargin: finite(income.grossMargin) ?? stock.grossMargin,
-    operatingMargin: finite(income.operatingMargin) ?? stock.operatingMargin,
-    pe: finite(valuation.pe) ?? stock.pe,
-    pb: finite(valuation.pb) ?? stock.pb,
-    foreign20: finite(chips.foreignNet) ?? stock.foreign20,
-    investmentTrust20: finite(chips.trustNet) ?? stock.investmentTrust20,
-    dealer20: finite(chips.dealerNet) ?? stock.dealer20,
-    margin20: finite(chips.marginChange) ?? stock.margin20,
-    short20: finite(chips.shortChange) ?? stock.short20,
-    factorSource: [revenue, income, valuation, chips].some(x => x.source === 'live') ? 'live' : stock.factorSource ?? 'demo'
+    reportedEps, revenueYoY,
+    cumulativeRevenueGrowth:finite(revenue.cumulativeRevenueYoY),
+    grossMargin:finite(income.grossMargin) ?? stock.grossMargin,
+    pe:finite(valuation.pe) ?? stock.pe, pb:finite(valuation.pb) ?? stock.pb,
+    foreignNetDaily, trustNetDaily:finite(chips.trustNetDaily), dealerNetDaily:finite(chips.dealerNetDaily), marginBalanceChangeDaily,
+    factorAvailability:{
+      reportedEps:availability(reportedEps, 'official income statement', 'No matching row/value in the latest official income-statement dataset'),
+      revenueYoY:availability(revenueYoY, 'official monthly revenue', 'No matching row/value in the latest official monthly-revenue dataset'),
+      foreign20:{ available:false, source:'official institutional daily data', reason:'20-session aggregate is not supplied by the current official batch source; daily value is retained separately' },
+      margin20:{ available:false, source:'official margin daily data', reason:'20-session aggregate is not supplied by the current official batch source; daily balance change is retained separately' }
+    },
+    factorSource:[revenue, income, valuation, chips].some(value => value.source === 'live') ? 'live' : 'missing'
   };
 }
 
-export function enrichBatch(stocks, factorMap = {}) {
-  return stocks.map(stock => enrichStock(stock, factorMap[stock.code] ?? {}));
-}
+export function enrichBatch(stocks, factorMap = {}) { return stocks.map(stock => enrichStock(stock, factorMap[stock.code] ?? {})); }

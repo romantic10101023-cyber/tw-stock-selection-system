@@ -34,7 +34,8 @@ export function createApp({ root = moduleRoot, dataDir = resolve(root, process.e
           const error = apiError(503, 'COVERAGE_UNAVAILABLE', 'Coverage is unavailable until the official live scan completes', { scan:runner.state() });
           return sendJson(res, error.status, error.body);
         }
-        return sendJson(res, 200, { ok:true, dataSource:latest.provider, candidateCount:latest.coverage?.total ?? 0, dailyCoverageCount:latest.coverage?.dailyBars ?? 0, weeklyCoverageCount:latest.coverage?.weeklyBars ?? 0, insufficientData:latest.insufficientData ?? [], insufficientByReason:latest.historyDiagnostics?.insufficientByReason ?? {}, historyDiagnostics:latest.historyDiagnostics ?? null, coverage:latest.coverage });
+        const diagnostics = latest.historyDiagnostics ?? {};
+        return sendJson(res, 200, { ok:true, dataSource:latest.provider, candidateCount:latest.coverage?.total ?? 0, universeCount:diagnostics.universeCount ?? latest.coverage?.total ?? 0, historyQueueTotal:diagnostics.historyQueueTotal ?? 0, historyQueueProcessed:diagnostics.historyQueueProcessed ?? 0, historyQueueRemaining:diagnostics.historyQueueRemaining ?? 0, historySuccessCount:diagnostics.historySuccessCount ?? 0, historyFailureCount:diagnostics.historyFailureCount ?? 0, dailyCoverageCount:latest.coverage?.dailyBars ?? 0, weeklyCoverageCount:latest.coverage?.weeklyBars ?? 0, missingFundamentalFields:latest.coverage?.missingFundamentalFields ?? {}, insufficientData:latest.insufficientData ?? [], insufficientByReason:diagnostics.insufficientByReason ?? {}, historyDiagnostics:diagnostics, coverage:latest.coverage });
       }
       if (url.pathname === API_ROUTES.health) {
         const history = await readJson(join(dataDir, 'scan-history.json'), []);

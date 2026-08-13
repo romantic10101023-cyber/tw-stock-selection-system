@@ -9,7 +9,7 @@ const safe = (n, fallback = 0) => Number.isFinite(Number(n)) ? Number(n) : fallb
 
 export function dataQuality(stock) {
   const errors = [];
-  const required = ['price', 'eps4q', 'revenueGrowth4q', 'volume5', 'foreign20', 'technical'];
+  const required = ['price', 'reportedEps', 'revenueYoY', 'volume5', 'technical'];
   for (const field of required) {
     if (stock[field] === undefined || stock[field] === null) errors.push(`缺少${field}`);
     else if (typeof stock[field] === 'number' && !Number.isFinite(stock[field])) errors.push(`${field}不是有效數字`);
@@ -33,7 +33,7 @@ export function tradability(stock) {
 export function scoreValuation(stock) {
   const pe = safe(stock.pe, null);
   const forwardPe = safe(stock.forwardPe, null);
-  const fair = safe(stock.fairValue, 0) || safe(stock.eps4q, 0) * safe(stock.normalPe, safe(stock.sectorPe, 15));
+  const fair = safe(stock.fairValue, 0) || safe(stock.reportedEps, safe(stock.eps4q, 0)) * safe(stock.normalPe, safe(stock.sectorPe, 15));
   const price = safe(stock.price);
   const discount = fair ? (fair - price) / fair : 0;
   let score = 0, label = '資料不足';
@@ -48,8 +48,8 @@ export function scoreValuation(stock) {
 export function scoreFundamentals(stock) {
   let score = 0;
   if (safe(stock.capital) > 5) score += 5;
-  if (safe(stock.revenueGrowth4q) >= 10) score += 5;
-  if (safe(stock.eps4q) >= 1) score += 5;
+  if (safe(stock.revenueYoY, safe(stock.revenueGrowth4q)) >= 10) score += 5;
+  if (safe(stock.reportedEps, safe(stock.eps4q)) >= 1) score += 5;
   if (safe(stock.cumulativeRevenueGrowth) >= 20) score += 5;
   if (safe(stock.grossMargin) >= 20) score += 2;
   if (safe(stock.roe) >= 15) score += 2;
@@ -58,6 +58,8 @@ export function scoreFundamentals(stock) {
 
 export function scoreChips(stock) {
   let score = 50;
+  if (safe(stock.foreignNetDaily) > 0) score += 15;
+  if (safe(stock.marginBalanceChangeDaily) < 0) score += 10;
   if (safe(stock.foreign20) > 0) score += 15;
   if (safe(stock.investmentTrust20) > 0) score += 15;
   if (safe(stock.margin20) < 0) score += 10;

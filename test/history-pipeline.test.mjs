@@ -37,7 +37,7 @@ function tpexLoader(code, asOf, { existingBars }) {
   }, logger:{error() {}} });
 }
 
-const stock = (code, market) => ({ code, market, name:code, price:100, eps4q:5, revenueGrowth4q:10, volume5:2000, foreign20:1, margin20:-1 });
+const stock = (code, market) => ({ code, market, name:code, price:100, reportedEps:5, revenueYoY:10, volume5:2000 });
 
 test('production queue always includes mandatory 2330 and 6488 smoke symbols', () => {
   const stocks = [stock('0050','twse'), stock('2330','twse'), stock('6488','tpex'), stock('1102','twse')];
@@ -48,7 +48,7 @@ test('2330 and 6488 pass 120/60 through the full production history pipeline', a
   const dir = await mkdtemp(join(tmpdir(), 'tw-history-pipeline-'));
   t.after(() => rm(dir, { recursive:true, force:true }));
   const stocks = [stock('0050','twse'), stock('2330','twse'), stock('6488','tpex')];
-  const result = await hydrateOfficialHistories(stocks, { cachePath:join(dir,'history-cache.json'), asOf:'2026-08-13', limit:2, loaders:{twse:twseLoader,tpex:tpexLoader}, logger:{log(){},error(){}} });
+  const result = await hydrateOfficialHistories(stocks, { cachePath:join(dir,'history-cache.json'), asOf:'2026-08-13', batchSize:2, loaders:{twse:twseLoader,tpex:tpexLoader}, logger:{log(){},error(){}} });
   const enriched = applyTechnicalBatch(stocks, result.historiesByCode);
   const partition = partitionByCoverage(enriched);
   assert.deepEqual(partition.eligible.map(item => item.code).sort(), ['2330','6488']);
@@ -65,7 +65,21 @@ test('2330 and 6488 pass 120/60 through the full production history pipeline', a
 test('one stock history failure does not eliminate other stocks', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'tw-history-failure-'));
   t.after(() => rm(dir, { recursive:true, force:true }));
-  const result = await hydrateOfficialHistories([stock('2330','twse'),stock('6488','tpex')], { cachePath:join(dir,'history-cache.json'), asOf:'2026-08-13', limit:2, loaders:{twse:async()=>{throw new Error('offline')},tpex:tpexLoader}, logger:{log(){},error(){}} });
+  const result = await hydrateOfficialHistories([stock('2330','twse'),stock('6488','tpex')], { cachePath:join(dir,'history-cache.json'), asOf:'2026-08-13', batchSize:2, loaders:{twse:async()=>{throw new Error('offline')},tpex:tpexLoader}, logger:{log(){},error(){}} });
   assert.equal(result.diagnostics.stockFailureCount, 1);
   assert.ok(result.historiesByCode['6488'].dailyBars >= 120);
+});
+
+test('persistent queue admits more than seven stocks and cached history counts across batches', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'tw-history-queue-'));
+  t.after(() => rm(dir, { recursive:true, force:true }));
+  const stocks = Array.from({ length:12 }, (_, index) => stock(String(1100 + index), 'twse'));
+  const options = { cachePath:join(dir,'history-cache.json'), queuePath:join(dir,'history-queue.json'), asOf:'2026-08-13', batchSize:8, priorityCodes:[], loaders:{ twse:twseLoader }, logger:{log(){},error(){}} };
+  const first = await hydrateOfficialHistories(stocks, options);
+  assert.equal(first.diagnostics.refreshQueue.length, 8);
+  assert.equal(first.diagnostics.historyQueueProcessed, 8);
+  const second = await hydrateOfficialHistories(stocks, options);
+  assert.equal(second.diagnostics.cachedCount, 8);
+  assert.equal(Object.values(second.historiesByCode).filter(history => history.dailyBars >= 120 && history.weeklyBars >= 60).length, 12);
+  assert.equal(second.diagnostics.historyQueueProcessed, 12);
 });

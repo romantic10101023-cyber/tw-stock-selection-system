@@ -14,7 +14,7 @@ import { snapshotRecommendations } from '../src/outcome.mjs';
 import { applyTechnicalBatch } from '../src/technical-enrich.mjs';
 import { loadOfficialFactorsDetailed } from '../src/factor-loader.mjs';
 import { enrichBatch } from '../src/enrich.mjs';
-import { coverageReport, partitionByCoverage } from '../src/data-coverage.mjs';
+import { coverageReport, missingFundamentalFields, partitionByCoverage } from '../src/data-coverage.mjs';
 import { groupInsufficientReasons, hydrateOfficialHistories, PRODUCTION_SMOKE_SYMBOLS } from '../src/history-pipeline.mjs';
 import { acquireScanLock, releaseScanLock } from '../src/scan-lock.mjs';
 import { releaseGate } from '../src/release-gate.mjs';
@@ -41,17 +41,19 @@ try {
     factorSources = factorResult.sources;
   }
   const stocksWithFactors = enrichBatch(loaded.stocks, factorMap);
+  const baseUniverse = filterUniverse(stocksWithFactors);
 
-  const historyLimit = Math.max(1, Number(process.env.HISTORY_LIMIT ?? 20));
+  const historyBatchSize = Math.max(8, Number(process.env.HISTORY_BATCH_SIZE ?? 10));
   const priorityCodes = [...new Set([...PRODUCTION_SMOKE_SYMBOLS, ...(process.env.HISTORY_PRIORITY_CODES ?? '').split(',').map(code => code.trim()).filter(Boolean)])];
-  const { historiesByCode, diagnostics:historyDiagnostics } = await hydrateOfficialHistories(stocksWithFactors, { cachePath:pathFor('history-cache.json'), asOf, limit:historyLimit, priorityCodes });
+  const { historiesByCode, diagnostics:historyDiagnostics } = await hydrateOfficialHistories(baseUniverse.included, { cachePath:pathFor('history-cache.json'), queuePath:pathFor('history-queue.json'), asOf, batchSize:historyBatchSize, priorityCodes });
 
-  const stocksWithTechnical = applyTechnicalBatch(stocksWithFactors, historiesByCode);
-  const universe = filterUniverse(stocksWithTechnical);
-  const coverage = coverageReport(universe.included);
-  const partition = partitionByCoverage(universe.included);
+  const stocksWithTechnical = applyTechnicalBatch(baseUniverse.included, historiesByCode);
+  const universe = { included:stocksWithTechnical, excluded:baseUniverse.excluded, counts:baseUniverse.counts };
+  const coverage = coverageReport(stocksWithTechnical);
+  const partition = partitionByCoverage(stocksWithTechnical);
   historyDiagnostics.validDailyCount = coverage.dailyBars;
   historyDiagnostics.validWeeklyCount = coverage.weeklyBars;
+  historyDiagnostics.missingFundamentalFields = missingFundamentalFields(stocksWithTechnical);
   historyDiagnostics.insufficientByReason = groupInsufficientReasons(partition.insufficient);
   console.log(JSON.stringify({ event:'history_pipeline_summary', ...historyDiagnostics }));
 
