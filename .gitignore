@@ -1,0 +1,7 @@
+data/latest-scan.json
+data/scan-history.json
+data/quotes-cache.json
+data/market-history.json
+data/recommendation-history.json
+data/history-cache.json
+data/scan.lock

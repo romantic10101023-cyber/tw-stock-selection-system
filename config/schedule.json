@@ -1,0 +1,9 @@
+{
+  "timezone": "Asia/Taipei",
+  "dailyScan": "23:30",
+  "officialDataRequired": true,
+  "historyLimitPerRun": 20,
+  "minDailyBars": 120,
+  "minWeeklyBars": 60,
+  "publishOnlyWhenGatePasses": true
+}

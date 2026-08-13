@@ -1,0 +1,22 @@
+name: Daily Taiwan Stock Scan
+
+on:
+  schedule:
+    # 23:30 Asia/Taipei = 15:30 UTC, weekdays
+    - cron: '30 15 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: USE_OFFICIAL_DATA=1 npm run scan
+      - name: Upload scan artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-scan-${{ github.run_id }}
+          path: data/

@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>台股多因子選股系統</title><link rel="stylesheet" href="/style.css"></head>
+<body><main>
+  <header><div><p class="eyebrow">TW STOCK SYSTEM · V3.0</p><h1>今日選股儀表板</h1><p class="muted">估值 × 基本面 × 籌碼 × 技術結構</p></div><div class="date">資料日期<br><strong id="asof">載入中</strong></div></header>
+  <section class="summary"><div><span>市場模式</span><b id="market-mode">震盪模式</b></div><div><span>候選池</span><b id="count">-</b></div><div><span>核心推薦</span><b id="top3count">-</b></div></section>
+  <section class="quality"><div><span>資料來源</span><b id="provider">載入中</b></div><div><span>掃描狀態</span><b id="freshness">載入中</b></div><div><span>日線／週線覆蓋</span><b id="bars-coverage">載入中</b></div><div><span>發布閘門</span><b id="release-status">載入中</b></div></section>
+  <section><div class="section-title"><h2>核心 Top 3</h2><span class="pill green">可布局</span></div><div id="top3" class="cards"></div></section>
+  <section><div class="section-title"><h2>Top 12 候選</h2><span class="muted">分數排序</span></div><div id="top12" class="table-wrap"></div></section>
+  <section><div class="section-title"><h2>等待／觀察</h2></div><div id="watch" class="watch"></div></section>
+  <footer id="source-note">資料來源狀態載入中。</footer>
+</main><script src="/app.js"></script></body></html>
