@@ -12,7 +12,7 @@ async function loadSafe(name, url) {
 
 export async function loadOfficialFactors() { return (await loadOfficialFactorsDetailed()).factors; }
 
-export async function loadOfficialFactorsDetailed() {
+export async function loadOfficialFactorsDetailed(allowedCodes = null) {
   const results = [];
   for (const [name, url] of Object.entries(SOURCES)) results.push(await loadSafe(name, url));
   const rows = Object.fromEntries(results.map(result => [result.name, result.rows]));
@@ -23,8 +23,9 @@ export async function loadOfficialFactorsDetailed() {
   const chips = mergeFactors(parseMargin(rows.twseMargin), parseMargin(rows.tpexMargin), parseInstitutions(rows.tpexInstitutions));
   const codes = new Set([...Object.keys(revenue), ...Object.keys(income), ...Object.keys(valuation), ...Object.keys(chips)]);
   const sourceRows = Object.fromEntries(results.map(result => [result.name, { ok:result.ok, rows:result.rows.length, error:result.error }]));
+  const allowed = allowedCodes ? new Set(allowedCodes) : null;
   return {
-    factors:Object.fromEntries([...codes].map(code => [code, { revenue:revenue[code], income:income[code], valuation:valuation[code], chips:chips[code] }])),
+    factors:Object.fromEntries([...codes].filter(code => !allowed || allowed.has(code)).map(code => [code, { revenue:revenue[code], income:income[code], valuation:valuation[code], chips:chips[code] }])),
     sources:{
       ...sourceRows,
       fieldAvailability:{

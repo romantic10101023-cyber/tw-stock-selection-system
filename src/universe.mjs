@@ -1,15 +1,33 @@
-const EXCLUDED = ['ETF', 'ETN', '權證', 'TDR', 'KY', '金融', '營建'];
+const reasonFor = stock => {
+  if (stock.isEtf || stock.securityType === 'etf_or_fund') return 'ETF／基金／ETN／REIT';
+  if (stock.isFinancial) return '官方產業分類：金融業';
+  if (stock.isConstruction) return '官方產業分類：建材營造業';
+  if (!stock.isCommonStock || stock.securityType !== 'common_stock') return `非普通股證券：${stock.securityType ?? 'unknown'}`;
+  return null;
+};
 
-export function filterUniverse(stocks, { minPrice = 30, minVolume5 = 1000 } = {}) {
+export function filterUniverse(stocks) {
   const included = [], excluded = [];
-  for (const stock of stocks) {
-    const excludedTag = EXCLUDED.find(tag => stock.tags?.includes(tag));
-    const reason = excludedTag ? `排除類別：${excludedTag}` :
-      Number(stock.price) < minPrice ? `股價低於${minPrice}元` :
-      Number(stock.volume5) < minVolume5 ? `5日均量低於${minVolume5}張` :
-      (!stock.code || !stock.name ? '缺少股票識別資料' : null);
-    if (reason) excluded.push({ ...stock, exclusionReason: reason });
-    else included.push(stock);
+  for (const raw of stocks) {
+    const stock = {
+      ...raw,
+      securityType:raw.securityType ?? 'unknown', industry:raw.industry ?? null,
+      isCommonStock:raw.isCommonStock === true, isEtf:raw.isEtf === true,
+      isFinancial:raw.isFinancial === true, isConstruction:raw.isConstruction === true
+    };
+    const exclusionReason = reasonFor(stock);
+    if (exclusionReason) excluded.push({ ...stock, exclusionReason });
+    else included.push({ ...stock, exclusionReason:null });
   }
-  return { included, excluded, counts: { input: stocks.length, included: included.length, excluded: excluded.length } };
+  const exclusionReasons = Object.fromEntries([...new Set(excluded.map(stock => stock.exclusionReason))].map(reason => [reason, excluded.filter(stock => stock.exclusionReason === reason).length]));
+  const counts = {
+    input:stocks.length, included:included.length, excluded:excluded.length,
+    rawUniverseCount:stocks.length, includedCommonStockCount:included.length,
+    excludedEtfFundCount:excluded.filter(stock => stock.isEtf || stock.securityType === 'etf_or_fund').length,
+    excludedFinancialCount:excluded.filter(stock => stock.isFinancial).length,
+    excludedConstructionCount:excluded.filter(stock => stock.isConstruction).length,
+    excludedOtherSecurityCount:excluded.filter(stock => !stock.isEtf && !stock.isFinancial && !stock.isConstruction).length,
+    exclusionReasons
+  };
+  return { included, excluded, counts };
 }

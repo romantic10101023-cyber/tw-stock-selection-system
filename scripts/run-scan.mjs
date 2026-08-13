@@ -18,6 +18,7 @@ import { coverageReport, missingFundamentalFields, partitionByCoverage } from '.
 import { groupInsufficientReasons, hydrateOfficialHistories, PRODUCTION_SMOKE_SYMBOLS } from '../src/history-pipeline.mjs';
 import { acquireScanLock, releaseScanLock } from '../src/scan-lock.mjs';
 import { releaseGate } from '../src/release-gate.mjs';
+import { classifyQuotes, loadOfficialSecurityMaster } from '../src/security-master-provider.mjs';
 
 const asOf = process.env.MARKET_DATE ?? new Date().toISOString().slice(0, 10);
 const dataDir = process.env.DATA_DIR ?? 'data';
@@ -31,23 +32,25 @@ try {
   const quoteCachePath = pathFor('quotes-cache.json');
   const provider = createProvider({ liveLoader:loadOfficialQuotes, cachedLoader:createFileCache(quoteCachePath) });
   const loaded = await provider.load(asOf);
-  if (loaded.status === 'live') await writeQuoteCache(quoteCachePath, loaded.stocks, asOf);
   const validation = validateBatch(loaded.stocks, asOf);
+  const securityMaster = await loadOfficialSecurityMaster();
+  const classifiedStocks = classifyQuotes(loaded.stocks, securityMaster);
+  if (loaded.status === 'live') await writeQuoteCache(quoteCachePath, classifiedStocks, asOf);
+  const baseUniverse = filterUniverse(classifiedStocks);
 
   let factorMap = {}, factorSources = {};
-  if (loaded.stocks.length) {
-    const factorResult = await loadOfficialFactorsDetailed();
+  if (baseUniverse.included.length) {
+    const factorResult = await loadOfficialFactorsDetailed(baseUniverse.included.map(stock => stock.code));
     factorMap = factorResult.factors;
     factorSources = factorResult.sources;
   }
-  const stocksWithFactors = enrichBatch(loaded.stocks, factorMap);
-  const baseUniverse = filterUniverse(stocksWithFactors);
+  const stocksWithFactors = enrichBatch(baseUniverse.included, factorMap);
 
   const historyBatchSize = Math.max(8, Number(process.env.HISTORY_BATCH_SIZE ?? 10));
   const priorityCodes = [...new Set([...PRODUCTION_SMOKE_SYMBOLS, ...(process.env.HISTORY_PRIORITY_CODES ?? '').split(',').map(code => code.trim()).filter(Boolean)])];
-  const { historiesByCode, diagnostics:historyDiagnostics } = await hydrateOfficialHistories(baseUniverse.included, { cachePath:pathFor('history-cache.json'), queuePath:pathFor('history-queue.json'), asOf, batchSize:historyBatchSize, priorityCodes });
+  const { historiesByCode, diagnostics:historyDiagnostics } = await hydrateOfficialHistories(stocksWithFactors, { cachePath:pathFor('history-cache.json'), queuePath:pathFor('history-queue.json'), asOf, batchSize:historyBatchSize, priorityCodes });
 
-  const stocksWithTechnical = applyTechnicalBatch(baseUniverse.included, historiesByCode);
+  const stocksWithTechnical = applyTechnicalBatch(stocksWithFactors, historiesByCode);
   const universe = { included:stocksWithTechnical, excluded:baseUniverse.excluded, counts:baseUniverse.counts };
   const coverage = coverageReport(stocksWithTechnical);
   const partition = partitionByCoverage(stocksWithTechnical);
@@ -67,10 +70,11 @@ try {
     console.error(JSON.stringify({ event:'market_history_error', error:error.message }));
   }
   const market = classifyMarket(historyInputs(marketHistory));
-  const lists = buildLists(partition.eligible, market.mode);
+  const queueComplete = historyDiagnostics.historyQueueRemaining === 0;
+  const lists = queueComplete ? buildLists(partition.eligible, market.mode) : { ranked:[], top12:[], top3:[], watch:[] };
   const result = {
     batchId, runAt:new Date().toISOString(), asOf, provider:loaded.status, factorSources, validation, coverage, historyDiagnostics,
-    universe:universe.counts, market, marketMode:market.mode, insufficientData:partition.insufficient.map(stock => ({ code:stock.code, name:stock.name, market:stock.market, ...stock.eligibility })),
+    universe:{ ...universe.counts, queueComplete }, market, marketMode:market.mode, insufficientData:partition.insufficient.map(stock => ({ code:stock.code, name:stock.name, market:stock.market, ...stock.eligibility })),
     scoredIneligible:0, ...lists
   };
   result.release = releaseGate(result, { officialRequired:true });
