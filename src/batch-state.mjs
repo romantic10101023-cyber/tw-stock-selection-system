@@ -21,12 +21,14 @@ export async function persistenceStatus(dataDir) {
 
 export async function acquireLease(path, now = new Date(), leaseMs = LEASE_MS) {
   await mkdir(dirname(path), { recursive:true });
-  const payload = { pid:process.pid, acquiredAt:now.toISOString(), expiresAt:new Date(now.getTime()+leaseMs).toISOString() };
+  const deploymentId=process.env.RAILWAY_DEPLOYMENT_ID??null;
+  const payload = { pid:process.pid, deploymentId, acquiredAt:now.toISOString(), expiresAt:new Date(now.getTime()+leaseMs).toISOString() };
   try { const handle=await open(path,'wx'); await handle.writeFile(JSON.stringify(payload,null,2)); await handle.close(); return { acquired:true, staleTakenOver:false, payload }; }
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
     const current = await readJson(path, null);
-    if (current && new Date(current.expiresAt).getTime() > now.getTime()) return { acquired:false, staleTakenOver:false, payload:current };
+    const supersededDeployment=Boolean(deploymentId&&current?.deploymentId!==deploymentId&&now.getTime()-new Date(current?.acquiredAt).getTime()>2*60*1000);
+    if (current && new Date(current.expiresAt).getTime() > now.getTime()&&!supersededDeployment) return { acquired:false, staleTakenOver:false, payload:current };
     try { await unlink(path); } catch (unlinkError) { if (unlinkError.code !== 'ENOENT') return { acquired:false, staleTakenOver:false, payload:current }; }
     const takeover = await acquireLease(path, now, leaseMs); return { ...takeover, staleTakenOver:takeover.acquired };
   }

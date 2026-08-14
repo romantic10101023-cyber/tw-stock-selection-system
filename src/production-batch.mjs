@@ -1,6 +1,6 @@
 import { mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { loadUniverseForScan, refreshUniverseInBackground } from './universe-store.mjs';
+import { loadUniverseForScan, prioritizeSmokeSymbols, refreshUniverseInBackground } from './universe-store.mjs';
 import { loadOfficialFactorsDetailed } from './factor-loader.mjs';
 import { enrichBatch } from './enrich.mjs';
 import { readHistoryCache } from './history-cache.mjs';
@@ -24,7 +24,7 @@ export async function runProductionBatch({dataDir=process.env.DATA_DIR??'data',a
   let migratedCount=0;
   const migrated=existingQueue.map(item=>{const bars=(historyCache[item.code]?.bars??[]).filter(bar=>bar.date<=asOf),weekly=aggregateWeeklyBars(bars).length;if(item.status!=='success'&&bars.length>=120&&weekly>=60){migratedCount++;return{...item,status:'success',dailyBars:bars.length,weeklyBars:weekly,finishedAt:new Date().toISOString(),lastError:null};}return item;});
   if(migratedCount){await atomicWriteJson(paths.queue,migrated);logger.log(JSON.stringify({event:'legacyCheckpointMigrated',success:migratedCount,total:migrated.length}));}
-  const queueStocks=universe.included;
+  const queueStocks=prioritizeSmokeSymbols(universe.included);
   const loaders={twse:loadTwseHistory,tpex:loadTpexHistory};
   const batch=await runPersistentBatch({dataDir,stocks:queueStocks,logger,batchSize:Math.min(10,Math.max(1,Number(process.env.HISTORY_BATCH_SIZE??10))),processStock:async item=>{
     const existingBars=(historyCache[item.code]?.bars??[]).filter(bar=>bar.date<=asOf),cachedOutcome=historyOutcome({bars:existingBars});
