@@ -16,7 +16,7 @@ export function parseTpexHistory(payload, { code, asOf, logger } = {}) {
   return normalizeOfficialRows({ rows, fields:payload?.tables?.[0]?.fields, code, market:'tpex', asOf, logger, dateParser:parseRocDate }).bars;
 }
 
-export async function loadTpexHistory(code, asOf = new Date().toISOString().slice(0, 10), { existingBars = [], months = HISTORY_MONTHS, fetchJson = fetchOfficialJson, logger = console } = {}) {
+export async function loadTpexHistory(code, asOf = new Date().toISOString().slice(0, 10), { existingBars = [], months = HISTORY_MONTHS, fetchJson = fetchOfficialJson, logger = console, signal } = {}) {
   let bars = mergeBars([], existingBars.filter(bar => validBar(bar, asOf).ok));
   const currentMonth = asOf.slice(0, 7);
   const cachedMonths = new Set(bars.map(bar => bar.date?.slice(0, 7)).filter(Boolean));
@@ -26,11 +26,12 @@ export async function loadTpexHistory(code, asOf = new Date().toISOString().slic
     return !cachedMonths.has(key) || key === currentMonth;
   });
   for (const request of requests) {
+    if(signal?.aborted) throw signal.reason??new Error('stock processing deadline exceeded');
     const key = `${request.year}-${String(request.month).padStart(2, '0')}`;
     if (cachedMonths.has(key) && key !== currentMonth) continue;
     try {
       const body = new URLSearchParams({ code, date:`${request.year}/${String(request.month).padStart(2, '0')}/01`, response:'json' });
-      const payload = await fetchJson(TPEX_HISTORY_URL, { method:'POST', body });
+      const payload = await fetchJson(TPEX_HISTORY_URL, { method:'POST', body, timeoutMs:12_000, attempts:1, signal });
       if (payload?.stat !== 'ok') throw new Error(payload?.stat ?? 'Invalid TPEX response');
       const table = payload?.tables?.[0];
       const normalized = normalizeOfficialRows({ rows:table?.data, fields:table?.fields, code, market:'tpex', asOf, logger, dateParser:parseRocDate });

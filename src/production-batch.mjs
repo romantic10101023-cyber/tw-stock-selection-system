@@ -14,6 +14,7 @@ import { releaseGate } from './release-gate.mjs';
 import { atomicWriteJson, createQueue, queueSummary, readJson, statePaths } from './batch-state.mjs';
 import { aggregateWeeklyBars } from './technical.mjs';
 import { appendScan } from './storage.mjs';
+import { getOfficialCircuitState } from './live-provider.mjs';
 
 export async function runProductionBatch({dataDir=process.env.DATA_DIR??'data',asOf=process.env.MARKET_DATE??new Date().toISOString().slice(0,10),logger=console,refreshUniverse=false}={}) {
   const cachePath=join(dataDir,'history-cache.json'),symbolCacheDir=join(dataDir,'history-by-symbol');await mkdir(symbolCacheDir,{recursive:true});
@@ -26,10 +27,10 @@ export async function runProductionBatch({dataDir=process.env.DATA_DIR??'data',a
   if(migratedCount){await atomicWriteJson(paths.queue,migrated);logger.log(JSON.stringify({event:'legacyCheckpointMigrated',success:migratedCount,total:migrated.length}));}
   const queueStocks=prioritizeSmokeSymbols(universe.included);
   const loaders={twse:loadTwseHistory,tpex:loadTpexHistory};
-  const batch=await runPersistentBatch({dataDir,stocks:queueStocks,logger,batchSize:Math.min(10,Math.max(1,Number(process.env.HISTORY_BATCH_SIZE??10))),processStock:async item=>{
+  const batch=await runPersistentBatch({dataDir,stocks:queueStocks,logger,diagnostics:getOfficialCircuitState,batchSize:Math.min(10,Math.max(1,Number(process.env.HISTORY_BATCH_SIZE??10))),processStock:async (item,{signal})=>{
     const existingBars=(historyCache[item.code]?.bars??[]).filter(bar=>bar.date<=asOf),cachedOutcome=historyOutcome({bars:existingBars});
     if(cachedOutcome.success)return cachedOutcome;
-    const history=await loaders[item.market](item.code,asOf,{existingBars}),outcome=historyOutcome(history);
+    const history=await loaders[item.market](item.code,asOf,{existingBars,signal}),outcome=historyOutcome(history);
     if(history.bars?.length){historyCache[item.code]={...history,bars:history.bars,dailyBars:outcome.dailyBars,weeklyBars:outcome.weeklyBars,cachedAt:new Date().toISOString()};await atomicWriteJson(join(symbolCacheDir,`${item.code}.json`),historyCache[item.code]);}
     return outcome;
   }});

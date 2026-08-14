@@ -12,6 +12,8 @@ export const OFFICIAL_RETRY_DELAYS_MS = [30_000, 60_000, 120_000, 240_000];
 let lastRequestAt = 0;
 let requestGate = Promise.resolve();
 let requestState = { endpoint:null, retry:0, attempts:0, timeoutSeconds:OFFICIAL_TIMEOUT_MS / 1000, status:null, recovering:false, lastError:null, updatedAt:null };
+const circuits = new Map();
+const CIRCUIT_THRESHOLD = 3, CIRCUIT_COOLDOWN_MS = 60_000;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -33,19 +35,27 @@ async function waitForSlot(minIntervalMs, sleepImpl) {
 }
 
 export const getOfficialRequestState = () => ({ ...requestState });
+export const getOfficialCircuitState = () => ({ circuitOpen:[...circuits.entries()].filter(([,state])=>state.openUntil>Date.now()).map(([endpoint,state])=>({endpoint,openUntil:new Date(state.openUntil).toISOString(),failures:state.failures})), timeoutCount:[...circuits.values()].reduce((sum,state)=>sum+(state.timeoutCount??0),0) });
+
+const circuitKey = value => { const url=new URL(value); return `${url.origin}${url.pathname}`; };
+function circuitBefore(url){const key=circuitKey(url),state=circuits.get(key);if(state?.openUntil>Date.now())throw Object.assign(new Error(`Official endpoint circuit open until ${new Date(state.openUntil).toISOString()}: ${key}`),{circuitOpen:true,endpoint:key});if(state?.openUntil)circuits.set(key,{...state,failures:0,openUntil:0});return key;}
+function circuitSuccess(key){circuits.set(key,{failures:0,openUntil:0,timeoutCount:circuits.get(key)?.timeoutCount??0});}
+function circuitFailure(key,error){if(!retryable(error))return;const previous=circuits.get(key)??{failures:0,openUntil:0,timeoutCount:0},failures=previous.failures+1;circuits.set(key,{failures,timeoutCount:previous.timeoutCount+(error.timeout?1:0),openUntil:failures>=CIRCUIT_THRESHOLD?Date.now()+CIRCUIT_COOLDOWN_MS:0});}
 
 function retryable(error) {
   return error?.timeout === true || error?.name === 'AbortError' || [429, 502, 503, 504].includes(error?.status) || error?.network === true;
 }
 
-export async function fetchOfficial(url, { responseType = 'json', timeoutMs = OFFICIAL_TIMEOUT_MS, attempts = OFFICIAL_ATTEMPTS, retryDelaysMs = OFFICIAL_RETRY_DELAYS_MS, minIntervalMs = MIN_REQUEST_INTERVAL_MS, fetchImpl = fetch, sleepImpl = sleep, logger = console, method = 'GET', body } = {}) {
+export async function fetchOfficial(url, { responseType = 'json', timeoutMs = OFFICIAL_TIMEOUT_MS, attempts = OFFICIAL_ATTEMPTS, retryDelaysMs = OFFICIAL_RETRY_DELAYS_MS, minIntervalMs = MIN_REQUEST_INTERVAL_MS, fetchImpl = fetch, sleepImpl = sleep, logger = console, method = 'GET', body, signal } = {}) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const key=circuitBefore(url);
     await waitForSlot(minIntervalMs, sleepImpl);
     const controller = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
-    requestState = { endpoint:url, retry:attempt, attempts, timeoutSeconds:timeoutMs / 1000, status:null, recovering:attempt > 1, lastError:attempt > 1 ? requestState.lastError : null, updatedAt:new Date().toISOString() };
+    const abort=()=>controller.abort(signal?.reason);signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
+    requestState = { endpoint:url, retry:attempt, attempts, timeoutSeconds:timeoutMs / 1000, status:null, recovering:attempt > 1, lastError:attempt > 1 ? requestState.lastError : null, requestStartedAt:new Date().toISOString(), updatedAt:new Date().toISOString() };
     try {
       const response = await fetchImpl(url, {
         method,
@@ -65,17 +75,20 @@ export async function fetchOfficial(url, { responseType = 'json', timeoutMs = OF
       }
       const result = responseType === 'json' ? await response.json() : responseType === 'buffer' ? await response.arrayBuffer() : await response.text();
       requestState = { ...requestState, status:response.status, recovering:false, lastError:null, updatedAt:new Date().toISOString() };
+      circuitSuccess(key);
       return result;
     } catch (error) {
       if (timedOut || error?.name === 'AbortError') Object.assign(error, { timeout:true });
       else if (!('status' in error)) Object.assign(error, { network:true });
       lastError = error;
+      circuitFailure(key,error);
       requestState = { ...requestState, status:error.status ?? null, recovering:true, lastError:error.message, updatedAt:new Date().toISOString() };
       logger.error?.(JSON.stringify({ event:'official_api_error', endpoint:url, attempt, attempts, status:error.status ?? null, responseBody:String(error.responseBody ?? '').slice(0, 500), timeoutSeconds:timeoutMs / 1000, timeout:Boolean(error.timeout), retryable:retryable(error), error:error.message }));
       if (attempt >= attempts || !retryable(error)) break;
       await sleepImpl(retryDelaysMs[Math.min(attempt - 1, retryDelaysMs.length - 1)] ?? retryDelaysMs.at(-1) ?? 30_000);
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort',abort);
     }
   }
   throw new Error(`Official API failed after ${requestState.retry} attempts: ${url}: ${lastError?.message ?? 'unknown error'}`, { cause:lastError });

@@ -20,17 +20,18 @@ function parseRocDate(value) {
 
 const monthKey = ({ year, month }) => `${year}-${String(month).padStart(2, '0')}`;
 
-export async function loadTwseHistory(code, asOf = new Date().toISOString().slice(0, 10), { existingBars = [], months = HISTORY_MONTHS, fetchJson = fetchOfficialJson, logger = console } = {}) {
+export async function loadTwseHistory(code, asOf = new Date().toISOString().slice(0, 10), { existingBars = [], months = HISTORY_MONTHS, fetchJson = fetchOfficialJson, logger = console, signal } = {}) {
   let bars = mergeBars([], existingBars.filter(bar => validBar(bar, asOf).ok));
   const currentMonth = asOf.slice(0, 7);
   const cachedMonths = new Set(bars.map(bar => bar.date?.slice(0, 7)).filter(Boolean));
   const errors = [];
   const requests = monthsBefore(asOf, months).filter(request => !cachedMonths.has(monthKey(request)) || monthKey(request) === currentMonth);
   for (const request of requests) {
+    if(signal?.aborted) throw signal.reason??new Error('stock processing deadline exceeded');
     const key = monthKey(request);
     if (cachedMonths.has(key) && key !== currentMonth) continue;
     try {
-      const payload = await fetchJson(TWSE_HISTORY_URL(code, request.year, request.month));
+      const payload = await fetchJson(TWSE_HISTORY_URL(code, request.year, request.month),{timeoutMs:12_000,attempts:1,signal});
       if (payload?.stat && payload.stat !== 'OK') throw new Error(payload.stat);
       const rows = Array.isArray(payload?.data) ? payload.data : [];
       const normalized = normalizeOfficialRows({ rows, fields:payload?.fields, code, market:'twse', asOf, logger, dateParser:value => parseRocDate(value) ?? value });
