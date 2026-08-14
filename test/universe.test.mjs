@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyQuotes, parseOfficialProductHtml, parseSecurityMaster } from '../src/security-master-provider.mjs';
+import { classifyQuotes, parseFundMaster, parseOfficialCsv, parseOfficialProductHtml, parseSecurityMaster } from '../src/security-master-provider.mjs';
 import { filterUniverse } from '../src/universe.mjs';
 import { selectHistoryRefreshQueue } from '../src/history-pipeline.mjs';
 
@@ -29,3 +29,7 @@ test('official product parser normalizes numeric, alphabetic, whitespace and hyp
   const products = parseOfficialProductHtml(productRows(['00685L','00945-B',' 00981A ','009802']), 'twse', 'official-test');
   for (const code of ['00685L','00945B','00981A','009802']) assert.equal(products[code].isEtf, true);
 });
+
+test('official machine-readable fund masters exclude required ETF symbols without ISIN HTML',()=>{const codes=['0050','0056','006208','00685L','00713','00878','00881','00888','00918','00919','00929','00981A','009802','00632R'];const rows=codes.map(code=>({'基金代號':code,'基金簡稱':`官方基金${code}`,'基金類型':'ETF'})),products=parseFundMaster(rows,'twse','official-openapi');for(const code of codes)assert.equal(products[code].isEtf,true);const result=filterUniverse(classifyQuotes(codes.map(code=>quote(code,`基金${code}`)),{companies:{},products}));assert.equal(result.included.length,0);assert.equal(result.counts.excludedEtfFundCount,codes.length);});
+
+test('official CSV fallback preserves quoted fields and Chinese headers',()=>{const rows=parseOfficialCsv('\uFEFF公司代號,公司簡稱,產業別\r\n2330,"台積,電",24\r\n');assert.equal(rows[0]['公司代號'],'2330');assert.equal(rows[0]['公司簡稱'],'台積,電');assert.equal(parseSecurityMaster(rows,'twse','official-csv')['2330'].industryCode,'24');});

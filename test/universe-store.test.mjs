@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { atomicWriteJson, readJson, statePaths } from '../src/batch-state.mjs';
-import { loadUniverseForScan } from '../src/universe-store.mjs';
+import { loadUniverseForScan, prioritizeSmokeSymbols } from '../src/universe-store.mjs';
 
 async function temp(t){const dir=await mkdtemp(join(tmpdir(),'tw-universe-'));t.after(()=>rm(dir,{recursive:true,force:true}));return dir;}
 const quote={code:'2330',name:'台積電',market:'twse',price:100};
@@ -17,3 +17,4 @@ test('persisted universe restores queue offline and timeout cannot clear existin
 
 test('failed initial universe records recovery error and no demo data',async t=>{const dir=await temp(t);await assert.rejects(loadUniverseForScan({dataDir:dir,asOf:'2026-08-14',loadQuotes:async()=>{throw new Error('official timeout');},loadMaster:async()=>master,logger:{error(){}}}),/official timeout/);const history=await readJson(join(dir,'scan-history.json'),[]);assert.equal(history[0].status,'recovering');assert.equal(history[0].demoFallback,false);assert.equal(await readJson(statePaths(dir).queue,null),null);});
 
+test('smoke symbols 2330 and 6488 are processed in the first 50 without truncating the full queue',()=>{const stocks=Array.from({length:100},(_,index)=>({code:String(1000+index),market:'twse'})).concat([{code:'2330',market:'twse'},{code:'6488',market:'tpex'}]),ordered=prioritizeSmokeSymbols(stocks);assert.deepEqual(ordered.slice(0,2).map(stock=>stock.code),['2330','6488']);assert.equal(ordered.length,102);});
