@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { releaseGate } from '../src/release-gate.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const requiredFiles = ['Dockerfile', '.env.example', 'config/schedule.json', 'docs/deployment.md', 'docs/production-checklist.md', 'src/price-history-provider.mjs', 'src/tpex-history-provider.mjs', 'src/history-pipeline.mjs', 'src/api-contract.mjs', 'src/scan-runner.mjs', 'test/history-pipeline.test.mjs', 'test/production-api.test.mjs'];
+const requiredFiles = ['Dockerfile', '.env.example', 'config/schedule.json', 'docs/deployment.md', 'docs/production-checklist.md', 'src/price-history-provider.mjs', 'src/tpex-history-provider.mjs', 'src/batch-state.mjs', 'src/batch-worker.mjs', 'src/api-contract.mjs', 'scripts/scan-batch.js', 'scripts/trigger-batch.js', 'test/batch-worker.test.mjs', 'test/production-api.test.mjs'];
 const missing = [];
 for (const file of requiredFiles) { try { await readFile(join(root, file)); } catch { missing.push(file); } }
 const schedule = JSON.parse(await readFile(join(root, 'config/schedule.json'), 'utf8'));

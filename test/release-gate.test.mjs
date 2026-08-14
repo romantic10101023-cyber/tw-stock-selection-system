@@ -9,4 +9,5 @@ test('正式資料與K線完整時才允許發布', () => {
   assert.equal(releaseGate({...base, coverage:{total:10, dailyBars:9, weeklyBars:10, eligible:9}}).publish, true);
   assert.equal(releaseGate({...base, coverage:{total:10, dailyBars:0, weeklyBars:0, eligible:0}}).publish, false);
   assert.equal(releaseGate({...base, scoredIneligible:1}).publish, false);
+  assert.equal(releaseGate({...base, universe:{queueComplete:false}}).publish, false);
 });

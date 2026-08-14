@@ -1,4 +1,4 @@
-export const API_ROUTES = Object.freeze({ health:'/api/health', scan:'/api/scan', coverage:'/api/coverage' });
+export const API_ROUTES = Object.freeze({ health:'/api/health', scan:'/api/scan', coverage:'/api/coverage', batch:'/api/admin/scan-batch' });
 
 export function scanResponse(scan, freshness) {
   return {

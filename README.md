@@ -1,70 +1,62 @@
-# 台股多因子選股系統
+# Taiwan Stock Selection System v3.0
 
-全新獨立專案，第一版以手機優先介面與可測試的純函式評分引擎為核心。
+正式資料只使用 TWSE／TPEX 官方來源。正式推薦要求至少 120 根有效日線、由日線聚合的 60 根週線、完整核心基本面，以及完整普通股 universe 已完成歷史掃描。
 
-## 已建立
-
-- 股票池排除與可交易性檢查
-- PE／Forward PE／合理價估值
-- 基本面品質評分
-- 法人、融資融券籌碼評分
-- 日線、週線、支撐結構評分
-- 動態總分、Top 12、Top 3 與觀察名單
-- 資料完整性與過期資料檢查
-- 手機版儀表板
-- Node 內建測試，無需安裝第三方套件
-- provider fallback：正式資料 → 快取 → 示範資料
-- 官方 TWSE／TPEx 行情 adapter（以環境變數啟用）
-- 上一次成功批次的本地快取 fallback
-- 官方請求節流：順序抓取、至少 1.2 秒間隔、失敗退避重試
-- 財報、月營收、PE、融資融券、三大法人因子解析與代號合併
-- 因子資料正式覆蓋到評分模型的 enrichment layer
-- 日線／週線均線、RSI、成交量、支撐與結構訊號計算
-- 大盤趨勢與市場廣度的多頭／震盪／空頭分類
-- 官方上市／上櫃指數與漲跌家數資料解析
-- 全市場股票池與排除原因保存
-- 市場指數／廣度歷史資料保存
-- 每日掃描讀取市場歷史後再判斷模式
-- 推薦快照、停損／TP1／持有結果驗證
-- 模型命中率、停損率、平均報酬與平均持有天數摘要
-- 4萬元單檔資金上限的股數、最大損失與TP1交易計畫
-- 個股OHLCV歷史K線標準化、驗證與快取合併
-- 歷史K線正式覆蓋日線／週線技術評分
-- 硬性K線門檻：日線至少120根、週線至少60根
-- 每檔上市股自動回溯18個月官方日線，產生足夠週線資料
-- 上櫃股票使用TPEx獨立歷史日成交解析器
-- 網站讀取掃描器最新驗證結果，不重新產生示範推薦
-- 掃描結果新鮮度與過期狀態檢查
-- 正式掃描器接入官方財報、PE、法人與融資因子
-- 掃描結果提供各資料模組覆蓋率與品質狀態
-- 掃描鎖、批次ID與重複執行保護
-- 各官方資料源獨立成功／失敗狀態與錯誤記錄
-- v3.0 正式發布閘門：官方資料與日線／週線完整才允許發布
-- 健康檢查與手機首頁顯示發布閘門原因
-- Docker、環境變數與每日23:30排程範本
-- scan CLI 與掃描歷史保存
-- `/api/health` 與批次資料驗證
-
-目前附帶的是可重現的示範資料；即時 TWSE／TPEx／財報資料接入會放在 provider 層，不把假資料誤標成即時行情。
-
-## 啟動
+## 本機指令
 
 ```bash
 npm start
+npm run scan:batch
+npm test
+npm run check
+npm run verify-release
 ```
 
-瀏覽器開啟 `http://localhost:8787`。
+`npm start` 只啟動 HTTP API，不會自動開始或無限續跑掃描。`npm run scan:batch` 最多處理 `HISTORY_BATCH_SIZE` 檔（預設 10、上限 20），保存後正常結束。
 
-執行一次掃描並保存結果：
+## Railway production：採用受保護 API 觸發（方案 A）
 
-```bash
-npm run scan
-```
+Railway 不允許假設不同 service 可以共享同一個 Volume，因此 checkpoint 只由 API Service 寫入其 Volume；Cron Service 透過受保護 endpoint 要求 API Service 執行一批。
 
-啟用官方行情測試：
+### 1. API Service
 
-```bash
-USE_OFFICIAL_DATA=1 npm run scan
-```
+- Repository：本專案 GitHub repository
+- Start Command：`npm start`
+- 環境變數：
+  - `DATA_DIR=/app/data`
+  - `RAILWAY_VOLUME_MOUNT_PATH=/app/data`
+  - `PERSISTENT_STORAGE=1`
+  - `BATCH_TRIGGER_TOKEN=<長且隨機的密鑰>`
+  - `HISTORY_BATCH_SIZE=10`
+- Railway Volume：必須建立並掛載到 `/app/data`
+- 對外提供首頁、`/api/health`、`/api/scan`、`/api/coverage`，以及受 Bearer token 保護的 `POST /api/admin/scan-batch`。
 
-若官方端拒絕連線、回傳格式異常或空資料，系統會先降級到上一個成功批次的快取，再降級到示範資料並記錄 provider 狀態。
+若未掛載 Volume，`/api/health` 會回傳 `persistenceStatus: "not_configured"`。這表示容器重啟會遺失 queue，不能宣稱可長期續跑。
+
+### 2. Batch/Cron Service
+
+- Repository：同一個 GitHub repository
+- 不需 Volume，也不得執行 `npm start`
+- Start Command：`npm run scan:trigger`
+- Cron Schedule：`*/5 * * * *`
+- 環境變數：
+  - `BATCH_TRIGGER_URL=https://<API-Service-domain>/api/admin/scan-batch`
+  - `BATCH_TRIGGER_TOKEN=<與 API Service 完全相同的密鑰>`
+
+Cron Service 每次只送出一次受保護請求後退出。實際 worker 是 API Service 的短生命 child process，因此讀寫同一個 `/app/data` Volume。即使 Cron 重疊，`worker-lock.json` lease 與 API process guard 也只允許一批執行；重疊請求會得到 `alreadyRunning`。
+
+## 持久化檔案
+
+`DATA_DIR` 包含：
+
+- `queue.json`：每檔的 pending/running/success/retryable/dead-letter 狀態
+- `checkpoint.json`：批次進度、覆蓋率與最近錯誤
+- `results.json`：逐檔結果
+- `failures.json`：逐次錯誤紀錄
+- `worker-lock.json`：15 分鐘 lease
+- `history-cache.json`：有效官方 OHLCV 快取
+- `latest-scan.json`：API 最新結果
+
+所有關鍵狀態使用 temporary file 加 rename 的 atomic write。啟動時會把超過 15 分鐘的 running 工作恢復成 retryable；最多重試三次，退避為 30、90、180 秒，之後進入 dead-letter。單檔失敗不會終止同批其他股票。
+
+舊版已有的 `history-cache.json` 會自動遷移：達到 120 日線與 60 週線者直接標記 success。因此原本 209/1803 若 Volume 仍保留舊快取，新 worker 會從下一個未完成股票繼續；若舊容器沒有 Volume，已遺失的本機檔案無法由程式復原。

@@ -28,6 +28,12 @@ export function createApp({ root = moduleRoot, dataDir = resolve(root, process.e
           : apiError(202, 'LIVE_SCAN_PENDING', 'Official live scan is still running; no recommendation data is available yet', { scan });
         return sendJson(res, error.status, error.body);
       }
+      if (url.pathname === API_ROUTES.batch && req.method === 'POST') {
+        const expected=process.env.BATCH_TRIGGER_TOKEN;
+        if(!expected||req.headers.authorization!==`Bearer ${expected}`){const error=apiError(401,'UNAUTHORIZED','Valid batch trigger token is required');return sendJson(res,error.status,error.body);}
+        const started=runner.start();
+        return sendJson(res,started?202:200,{ok:true,status:started?'batchStarted':'alreadyRunning',scan:runner.state()});
+      }
       if (url.pathname === API_ROUTES.coverage) {
         const latest = await readLatestScan(join(dataDir, 'latest-scan.json'));
         if (!latest) {
@@ -36,17 +42,19 @@ export function createApp({ root = moduleRoot, dataDir = resolve(root, process.e
         }
         const diagnostics = latest.historyDiagnostics ?? {};
         const universe = latest.universe ?? {};
-        const checkpoint = await readJson(join(dataDir, 'history-queue.json'), null);
+        const checkpoint = await readJson(join(dataDir, 'checkpoint.json'), null);
         const total = universe.includedCommonStockCount ?? latest.coverage?.total ?? 0;
         const daily = latest.coverage?.dailyBars ?? 0, weekly = latest.coverage?.weeklyBars ?? 0;
-        return sendJson(res, 200, { ok:true, dataSource:latest.provider, candidateCount:latest.coverage?.total ?? 0, universeCount:diagnostics.universeCount ?? latest.coverage?.total ?? 0, rawUniverseCount:universe.rawUniverseCount ?? 0, includedCommonStockCount:total, officialEtfCount:universe.officialEtfCount ?? 0, excludedEtfFundCount:universe.excludedEtfFundCount ?? 0, excludedFinancialCount:universe.excludedFinancialCount ?? 0, excludedConstructionCount:universe.excludedConstructionCount ?? 0, excludedOtherSecurityCount:universe.excludedOtherSecurityCount ?? 0, excludedEtfSymbols:universe.excludedEtfSymbols ?? [], excludedEtfNames:universe.excludedEtfNames ?? [], exclusionReasons:universe.exclusionReasons ?? {}, classificationSource:universe.classificationSource ?? [], historyQueueTotal:diagnostics.historyQueueTotal ?? 0, historyQueueProcessed:diagnostics.historyQueueProcessed ?? 0, historyQueueRemaining:diagnostics.historyQueueRemaining ?? 0, historySuccessCount:diagnostics.historySuccessCount ?? 0, historyFailureCount:diagnostics.historyFailureCount ?? 0, dailyCoverageCount:daily, weeklyCoverageCount:weekly, dailyCoveragePercent:total ? Math.round(daily / total * 1000) / 10 : 0, weeklyCoveragePercent:total ? Math.round(weekly / total * 1000) / 10 : 0, incompleteHistoryReasons:diagnostics.insufficientByReason ?? {}, missingFundamentalFields:latest.coverage?.missingFundamentalFields ?? {}, insufficientData:latest.insufficientData ?? [], insufficientByReason:diagnostics.insufficientByReason ?? {}, historyDiagnostics:diagnostics, queueCheckpoint:checkpoint, lastUpdatedAt:checkpoint?.lastProgressAt ?? checkpoint?.updatedAt ?? latest.runAt, coverage:latest.coverage });
+        return sendJson(res, 200, { ok:true, dataSource:latest.provider, candidateCount:latest.coverage?.total ?? 0, universeCount:diagnostics.universeCount ?? latest.coverage?.total ?? 0, rawUniverseCount:universe.rawUniverseCount ?? 0, includedCommonStockCount:total, officialEtfCount:universe.officialEtfCount ?? 0, excludedEtfFundCount:universe.excludedEtfFundCount ?? 0, excludedFinancialCount:universe.excludedFinancialCount ?? 0, excludedConstructionCount:universe.excludedConstructionCount ?? 0, excludedOtherSecurityCount:universe.excludedOtherSecurityCount ?? 0, excludedEtfSymbols:universe.excludedEtfSymbols ?? [], excludedEtfNames:universe.excludedEtfNames ?? [], exclusionReasons:universe.exclusionReasons ?? {}, classificationSource:universe.classificationSource ?? [], historyQueueTotal:checkpoint?.total??diagnostics.historyQueueTotal??0, historyQueueProcessed:checkpoint?.processed??diagnostics.historyQueueProcessed??0, historyQueueRemaining:checkpoint?.remaining??diagnostics.historyQueueRemaining??0, historySuccessCount:checkpoint?.successCount??diagnostics.historySuccessCount??0, historyFailureCount:checkpoint?.deadLetterCount??diagnostics.historyFailureCount??0, dailyCoverageCount:checkpoint?.dailyCoverageCount??daily, weeklyCoverageCount:checkpoint?.weeklyCoverageCount??weekly, dailyCoveragePercent:checkpoint?.total?Math.round((checkpoint.dailyCoverageCount??0)/checkpoint.total*1000)/10:0, weeklyCoveragePercent:checkpoint?.total?Math.round((checkpoint.weeklyCoverageCount??0)/checkpoint.total*1000)/10:0, incompleteHistoryReasons:diagnostics.insufficientByReason ?? {}, missingFundamentalFields:latest.coverage?.missingFundamentalFields ?? {}, insufficientData:latest.insufficientData ?? [], insufficientByReason:diagnostics.insufficientByReason ?? {}, historyDiagnostics:diagnostics, queueCheckpoint:checkpoint, lastUpdatedAt:checkpoint?.lastProgressAt ?? latest.runAt, coverage:latest.coverage });
       }
       if (url.pathname === API_ROUTES.health) {
         const history = await readJson(join(dataDir, 'scan-history.json'), []);
         const latest = await readLatestScan(join(dataDir, 'latest-scan.json'));
-        const checkpoint = await readJson(join(dataDir, 'history-queue.json'), null);
-        const lock = await readJson(join(dataDir, 'scan.lock'), null);
-        return sendJson(res, 200, { ok:true, engine:'v3.0', scan:{ ...runner.state(), queueTotal:checkpoint?.total ?? 0, queueProcessed:checkpoint?.processed?.length ?? 0, queueRemaining:checkpoint?.pending?.length ?? 0, currentBatch:checkpoint?.currentBatch ?? 0, lastProgressAt:checkpoint?.lastProgressAt ?? checkpoint?.updatedAt ?? null, workerLocked:Boolean(lock) }, scanCount:history.length, dataMode:latest?.provider ?? 'missing', freshness:scanFreshness(latest), release:latest?.release ?? { publish:false, failures:['Official live scan has not completed'] }, coverage:latest?.coverage ?? null });
+        const checkpoint = await readJson(join(dataDir, 'checkpoint.json'), null);
+        const lock = await readJson(join(dataDir, 'worker-lock.json'), null);
+        const persistenceStatus=checkpoint?.persistenceStatus??(process.env.RAILWAY_VOLUME_MOUNT_PATH||process.env.PERSISTENT_STORAGE==='1'?'configured':'not_configured');
+        const lastProgress=checkpoint?.lastProgressAt?new Date(checkpoint.lastProgressAt).getTime():0,stalled=Boolean(checkpoint?.remaining&&lastProgress&&Date.now()-lastProgress>20*60*1000);
+        return sendJson(res, 200, { ok:true, engine:'v3.0', scan:{ ...runner.state(), status:runner.state().status==='idle'?(checkpoint?.status??'idle'):runner.state().status,lastStartedAt:checkpoint?.lastStartedAt??runner.state().startedAt,lastFinishedAt:checkpoint?.lastFinishedAt??runner.state().finishedAt,lastExitCode:checkpoint?.lastExitCode??runner.state().exitCode,currentBatch:checkpoint?.currentBatch??0,batchSize:checkpoint?.batchSize??10,processed:checkpoint?.processed??0,remaining:checkpoint?.remaining??0,successCount:checkpoint?.successCount??0,retryableCount:checkpoint?.retryableCount??0,deadLetterCount:checkpoint?.deadLetterCount??0,dailyCoverageCount:checkpoint?.dailyCoverageCount??0,weeklyCoverageCount:checkpoint?.weeklyCoverageCount??0,dailyCoveragePercent:checkpoint?.total?Math.round((checkpoint.dailyCoverageCount??0)/checkpoint.total*1000)/10:0,weeklyCoveragePercent:checkpoint?.total?Math.round((checkpoint.weeklyCoverageCount??0)/checkpoint.total*1000)/10:0,lastProgressAt:checkpoint?.lastProgressAt??null,stalled,stalledReason:stalled?'No checkpoint progress for more than 20 minutes':null,lockStatus:lock?'locked':'available',queueFile:join(dataDir,'queue.json'),persistenceStatus,lastError:checkpoint?.lastError??null }, scanCount:history.length, dataMode:latest?.provider ?? 'missing', freshness:scanFreshness(latest), release:latest?.release ?? { publish:false, failures:['Official live scan has not completed'] }, coverage:latest?.coverage ?? null });
       }
       if (url.pathname.startsWith('/api/')) {
         const error = apiError(404, 'API_ROUTE_NOT_FOUND', `No API route exists for ${url.pathname}`);
@@ -78,7 +86,6 @@ export function startServer() {
   const host = process.env.HOST ?? '0.0.0.0';
   server.listen(port, host, () => {
     console.log(`TW Stock System: http://${host}:${port}`);
-    if (process.env.AUTO_SCAN !== '0') runner.start();
   });
   return server;
 }

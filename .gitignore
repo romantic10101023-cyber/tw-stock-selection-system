@@ -5,4 +5,10 @@ data/market-history.json
 data/recommendation-history.json
 data/history-cache.json
 data/history-queue.json
+data/queue.json
+data/checkpoint.json
+data/results.json
+data/failures.json
+data/worker-lock.json
+data/.persistence-check
 data/scan.lock

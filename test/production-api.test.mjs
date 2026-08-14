@@ -63,13 +63,12 @@ test('frontend scan path matches the backend route contract', async () => {
 });
 
 test('health exposes persistent worker progress', t => withServer(t, async ({ base, dataDir }) => {
-  await writeFile(join(dataDir, 'history-queue.json'), JSON.stringify({ total:100, processed:['2330'], pending:['6488'], currentBatch:2, lastProgressAt:'2026-08-14T00:00:00Z' }));
-  await writeFile(join(dataDir, 'scan.lock'), JSON.stringify({ pid:123, startedAt:'2026-08-14T00:00:00Z' }));
+  await writeFile(join(dataDir, 'checkpoint.json'), JSON.stringify({ total:100, processed:1, remaining:1, currentBatch:2, lastProgressAt:'2026-08-14T00:00:00Z' }));
+  await writeFile(join(dataDir, 'worker-lock.json'), JSON.stringify({ pid:123, acquiredAt:'2026-08-14T00:00:00Z' }));
   const response = await fetch(`${base}${API_ROUTES.health}`);
   const body = await response.json();
-  assert.equal(body.scan.queueTotal, 100);
-  assert.equal(body.scan.queueProcessed, 1);
-  assert.equal(body.scan.queueRemaining, 1);
+  assert.equal(body.scan.processed, 1);
+  assert.equal(body.scan.remaining, 1);
   assert.equal(body.scan.currentBatch, 2);
-  assert.equal(body.scan.workerLocked, true);
+  assert.equal(body.scan.lockStatus, 'locked');
 }));
