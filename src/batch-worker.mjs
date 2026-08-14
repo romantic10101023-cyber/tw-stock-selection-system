@@ -6,10 +6,12 @@ export async function runPersistentBatch({ dataDir, stocks, processStock, batchS
   if (!lease.acquired) { logger.log(JSON.stringify({event:'alreadyRunning',lock:lease.payload})); return { alreadyRunning:true,exitCode:0 }; }
   try {
     let queue=createQueue(stocks,await readJson(paths.queue,[]));
+    const staleRecovered=queue.filter(item=>item.status==='running'&&now().getTime()-new Date(item.startedAt).getTime()>15*60*1000).length;
     queue=recoverStaleRunning(queue,now());
     const claimed=claimBatch(queue,batchSize,now()); queue=claimed.queue;
     await atomicWriteJson(paths.queue,queue);
     const checkpoint=await readJson(paths.checkpoint,{currentBatch:0});
+    checkpoint.staleRecovered=(checkpoint.staleRecovered??0)+staleRecovered;
     const batchNumber=Number(checkpoint.currentBatch??0)+1;
     await atomicWriteJson(paths.checkpoint,{...checkpoint,currentBatch:batchNumber,lastStartedAt:now().toISOString(),lastProgressAt:now().toISOString(),status:'running',batchSize,persistenceStatus:await persistenceStatus(dataDir)});
     logger.log(JSON.stringify({event:'batchStarted',batch:batchNumber,size:claimed.batch.length}));
@@ -33,7 +35,7 @@ export async function runPersistentBatch({ dataDir, stocks, processStock, batchS
       }
       await atomicWriteJson(paths.queue,queue); await atomicWriteJson(paths.results,results); await atomicWriteJson(paths.failures,failures);
       const summary=queueSummary(queue);
-      await atomicWriteJson(paths.checkpoint,{...checkpoint,...summary,currentBatch:batchNumber,lastStartedAt:checkpoint.lastStartedAt??now().toISOString(),lastProgressAt:now().toISOString(),status:'running',batchSize,persistenceStatus:await persistenceStatus(dataDir)});
+      await atomicWriteJson(paths.checkpoint,{...checkpoint,...summary,currentBatch:batchNumber,lastStartedAt:checkpoint.lastStartedAt??now().toISOString(),lastProgressAt:now().toISOString(),status:'running',batchSize,lastError:queue[index].lastError??checkpoint.lastError??null,persistenceStatus:await persistenceStatus(dataDir)});
     }
     const summary=queueSummary(queue);
     await atomicWriteJson(paths.checkpoint,{...checkpoint,...summary,currentBatch:batchNumber,lastStartedAt:checkpoint.lastStartedAt??now().toISOString(),lastFinishedAt:now().toISOString(),lastProgressAt:now().toISOString(),lastExitCode:0,status:summary.remaining?'batch_complete':'queueComplete',batchSize,persistenceStatus:await persistenceStatus(dataDir)});

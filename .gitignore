@@ -11,4 +11,5 @@ data/results.json
 data/failures.json
 data/worker-lock.json
 data/.persistence-check
+data/history-by-symbol/
 data/scan.lock

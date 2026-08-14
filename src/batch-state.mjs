@@ -53,5 +53,5 @@ export function completeItem(item, outcome, now=new Date()) {
 }
 export function queueSummary(queue) {
   const count=status=>queue.filter(item=>item.status===status).length;
-  return { total:queue.length,processed:count('success')+count('dead-letter'),remaining:count('pending')+count('running')+count('retryable'),successCount:count('success'),retryableCount:count('retryable'),deadLetterCount:count('dead-letter'),dailyCoverageCount:queue.filter(item=>item.dailyBars>=120).length,weeklyCoverageCount:queue.filter(item=>item.weeklyBars>=60).length };
+  return { total:queue.length,processed:count('success')+count('dead-letter'),remaining:count('pending')+count('running')+count('retryable'),successCount:count('success'),failedCount:count('retryable')+count('dead-letter'),retryCount:count('retryable'),retryableCount:count('retryable'),deadLetterCount:count('dead-letter'),dailyCoverageCount:queue.filter(item=>item.dailyBars>=120).length,weeklyCoverageCount:queue.filter(item=>item.weeklyBars>=60).length };
 }
