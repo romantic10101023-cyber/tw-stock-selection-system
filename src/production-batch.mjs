@@ -1,8 +1,6 @@
 import { mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { loadOfficialQuotes } from './live-provider.mjs';
-import { classifyQuotes, loadOfficialSecurityMaster, SECURITY_MASTER_URLS } from './security-master-provider.mjs';
-import { filterUniverse } from './universe.mjs';
+import { loadUniverseForScan, refreshUniverseInBackground } from './universe-store.mjs';
 import { loadOfficialFactorsDetailed } from './factor-loader.mjs';
 import { enrichBatch } from './enrich.mjs';
 import { readHistoryCache } from './history-cache.mjs';
@@ -17,17 +15,16 @@ import { atomicWriteJson, createQueue, queueSummary, readJson, statePaths } from
 import { aggregateWeeklyBars } from './technical.mjs';
 import { appendScan } from './storage.mjs';
 
-export async function runProductionBatch({dataDir=process.env.DATA_DIR??'data',asOf=process.env.MARKET_DATE??new Date().toISOString().slice(0,10),logger=console}={}) {
+export async function runProductionBatch({dataDir=process.env.DATA_DIR??'data',asOf=process.env.MARKET_DATE??new Date().toISOString().slice(0,10),logger=console,refreshUniverse=false}={}) {
   const cachePath=join(dataDir,'history-cache.json'),symbolCacheDir=join(dataDir,'history-by-symbol');await mkdir(symbolCacheDir,{recursive:true});
   const historyCache=await readHistoryCache(cachePath);
   for(const file of await readdir(symbolCacheDir)){if(!file.endsWith('.json'))continue;const code=file.slice(0,-5),payload=await readJson(join(symbolCacheDir,file),null);if(payload?.bars?.length)historyCache[code]=payload;}
-  const quotes=await loadOfficialQuotes(asOf),master=await loadOfficialSecurityMaster(),universe=filterUniverse(classifyQuotes(quotes,master));
-  universe.counts.officialEtfCount=master.officialEtfSymbols.length;
-  universe.counts.excludedEtfSymbols=universe.excluded.filter(s=>s.isEtf||s.isFund||s.isEtn||s.isReit).map(s=>s.code);
-  universe.counts.excludedEtfNames=universe.excluded.filter(s=>s.isEtf||s.isFund||s.isEtn||s.isReit).map(s=>s.name);
-  universe.counts.classificationSource=Object.values(SECURITY_MASTER_URLS);
-  const factors=await loadOfficialFactorsDetailed(universe.included.map(s=>s.code)),stocks=enrichBatch(universe.included,factors.factors),paths=statePaths(dataDir),existingQueue=await readJson(paths.queue,null);
-  if(!existingQueue){const migrated=createQueue(stocks).map(item=>{const bars=(historyCache[item.code]?.bars??[]).filter(bar=>bar.date<=asOf),weekly=aggregateWeeklyBars(bars).length;return bars.length>=120&&weekly>=60?{...item,status:'success',dailyBars:bars.length,weeklyBars:weekly,finishedAt:new Date().toISOString()}:item;});await atomicWriteJson(paths.queue,migrated);logger.log(JSON.stringify({event:'legacyCheckpointMigrated',success:migrated.filter(i=>i.status==='success').length,total:migrated.length}));}
+  const snapshot=await loadUniverseForScan({dataDir,asOf,logger}),universe=snapshot.universe,quotes=snapshot.quotes??[...universe.included,...universe.excluded],paths=statePaths(dataDir);
+  const existingQueue=await readJson(paths.queue,createQueue(universe.included));
+  let migratedCount=0;
+  const migrated=existingQueue.map(item=>{const bars=(historyCache[item.code]?.bars??[]).filter(bar=>bar.date<=asOf),weekly=aggregateWeeklyBars(bars).length;if(item.status!=='success'&&bars.length>=120&&weekly>=60){migratedCount++;return{...item,status:'success',dailyBars:bars.length,weeklyBars:weekly,finishedAt:new Date().toISOString(),lastError:null};}return item;});
+  if(migratedCount){await atomicWriteJson(paths.queue,migrated);logger.log(JSON.stringify({event:'legacyCheckpointMigrated',success:migratedCount,total:migrated.length}));}
+  const factors=await loadOfficialFactorsDetailed(universe.included.map(s=>s.code)),stocks=enrichBatch(universe.included,factors.factors);
   const loaders={twse:loadTwseHistory,tpex:loadTpexHistory};
   const batch=await runPersistentBatch({dataDir,stocks,logger,batchSize:Math.min(10,Math.max(1,Number(process.env.HISTORY_BATCH_SIZE??10))),processStock:async item=>{
     const existingBars=(historyCache[item.code]?.bars??[]).filter(bar=>bar.date<=asOf),cachedOutcome=historyOutcome({bars:existingBars});
@@ -44,5 +41,6 @@ export async function runProductionBatch({dataDir=process.env.DATA_DIR??'data',a
   result.release=releaseGate(result,{officialRequired:true});
   await atomicWriteJson(join(dataDir,'latest-scan.json'),result);
   await appendScan(join(dataDir,'scan-history.json'),{runAt:result.runAt,asOf,provider:'live',queue:summary,release:result.release,top3:result.top3.map(stock=>stock.code)});
+  if(refreshUniverse&&snapshot.source==='cache') refreshUniverseInBackground({dataDir,asOf,logger});
   return {...batch,summary,result};
 }

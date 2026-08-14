@@ -7,6 +7,7 @@ import { readLatestScan, scanFreshness } from './src/scan-result.mjs';
 import { API_ROUTES, apiError, scanResponse } from './src/api-contract.mjs';
 import { createScanCoordinator } from './src/scan-coordinator.mjs';
 import { runProductionBatch } from './src/production-batch.mjs';
+import { getOfficialRequestState } from './src/live-provider.mjs';
 
 const moduleRoot = fileURLToPath(new URL('.', import.meta.url));
 const types = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8' };
@@ -32,8 +33,10 @@ export function createApp({ root = moduleRoot, dataDir = resolve(root, process.e
       if (url.pathname === API_ROUTES.coverage) {
         const latest = await readLatestScan(join(dataDir, 'latest-scan.json'));
         if (!latest) {
-          const error = apiError(503, 'COVERAGE_UNAVAILABLE', 'Coverage is unavailable until the official live scan completes', { scan:runner.state() });
-          return sendJson(res, error.status, error.body);
+          const checkpoint = await readJson(join(dataDir, 'checkpoint.json'), null);
+          const snapshot = await readJson(join(dataDir, 'universe.json'), null);
+          const total = checkpoint?.total ?? snapshot?.universe?.included?.length ?? 0;
+          return sendJson(res, 200, { ok:true, dataSource:'missing', status:'pending', reason:total?'完整普通股歷史仍未掃描完成':'官方 universe 尚未成功建立', rawUniverseCount:snapshot?.universe?.counts?.rawUniverseCount??0, includedCommonStockCount:total, historyQueueTotal:total, historyQueueProcessed:checkpoint?.processed??0, historyQueueRemaining:checkpoint?.remaining??total, historySuccessCount:checkpoint?.successCount??0, historyFailureCount:checkpoint?.failedCount??0, historyRetryCount:checkpoint?.retryCount??0, dailyCoverageCount:checkpoint?.dailyCoverageCount??0, weeklyCoverageCount:checkpoint?.weeklyCoverageCount??0, dailyCoveragePercent:checkpoint?.total?Math.round((checkpoint.dailyCoverageCount??0)/checkpoint.total*1000)/10:0, weeklyCoveragePercent:checkpoint?.total?Math.round((checkpoint.weeklyCoverageCount??0)/checkpoint.total*1000)/10:0, queueCheckpoint:checkpoint, coverage:{total,dailyBars:checkpoint?.dailyCoverageCount??0,weeklyBars:checkpoint?.weeklyCoverageCount??0,eligible:0}, insufficientData:[], recommendations:[], scan:runner.state() });
         }
         const diagnostics = latest.historyDiagnostics ?? {};
         const universe = latest.universe ?? {};
@@ -49,7 +52,8 @@ export function createApp({ root = moduleRoot, dataDir = resolve(root, process.e
         const lock = await readJson(join(dataDir, 'worker-lock.json'), null);
         const persistenceStatus=checkpoint?.persistenceStatus??(process.env.RAILWAY_VOLUME_MOUNT_PATH||process.env.PERSISTENT_STORAGE==='1'?'configured':'not_configured');
         const lastProgress=checkpoint?.lastProgressAt?new Date(checkpoint.lastProgressAt).getTime():0,stalled=Boolean(checkpoint?.remaining&&lastProgress&&Date.now()-lastProgress>20*60*1000);
-        return sendJson(res, 200, { ok:true, engine:'v3.0', scan:{ ...runner.state(), status:runner.state().status==='idle'?(checkpoint?.status??'idle'):runner.state().status,lastStartedAt:checkpoint?.lastStartedAt??runner.state().startedAt,lastFinishedAt:checkpoint?.lastFinishedAt??runner.state().finishedAt,lastExitCode:checkpoint?.lastExitCode??runner.state().exitCode,currentBatch:checkpoint?.currentBatch??0,batchSize:checkpoint?.batchSize??10,processed:checkpoint?.processed??0,remaining:checkpoint?.remaining??0,successCount:checkpoint?.successCount??0,failedCount:checkpoint?.failedCount??0,retryCount:checkpoint?.retryCount??checkpoint?.retryableCount??0,retryableCount:checkpoint?.retryableCount??0,deadLetterCount:checkpoint?.deadLetterCount??0,staleRecovered:checkpoint?.staleRecovered??0,dailyCoverageCount:checkpoint?.dailyCoverageCount??0,weeklyCoverageCount:checkpoint?.weeklyCoverageCount??0,dailyCoveragePercent:checkpoint?.total?Math.round((checkpoint.dailyCoverageCount??0)/checkpoint.total*1000)/10:0,weeklyCoveragePercent:checkpoint?.total?Math.round((checkpoint.weeklyCoverageCount??0)/checkpoint.total*1000)/10:0,lastProgressAt:checkpoint?.lastProgressAt??null,stalled,stalledReason:stalled?'No checkpoint progress for more than 20 minutes':null,lockStatus:lock?'locked':'available',queueFile:join(dataDir,'queue.json'),persistenceStatus,lastError:checkpoint?.lastError??runner.state().error??null }, scanCount:history.length, dataMode:latest?.provider ?? 'missing', freshness:scanFreshness(latest), release:latest?.release ?? { publish:false, failures:['Official live scan has not completed'] }, coverage:latest?.coverage ?? null });
+        const officialRequest=getOfficialRequestState();
+        return sendJson(res, 200, { ok:true, engine:'v3.0', scan:{ ...runner.state(), status:officialRequest.recovering?'recovering':runner.state().status==='idle'?(checkpoint?.status??'idle'):runner.state().status,lastStartedAt:checkpoint?.lastStartedAt??runner.state().startedAt,lastFinishedAt:checkpoint?.lastFinishedAt??runner.state().finishedAt,lastExitCode:checkpoint?.lastExitCode??runner.state().exitCode,currentEndpoint:officialRequest.endpoint,currentRetry:officialRequest.retry,requestAttempts:officialRequest.attempts,requestTimeoutSeconds:officialRequest.timeoutSeconds,currentBatch:checkpoint?.currentBatch??0,batchSize:checkpoint?.batchSize??10,total:checkpoint?.total??0,processed:checkpoint?.processed??0,remaining:checkpoint?.remaining??0,successCount:checkpoint?.successCount??0,failedCount:checkpoint?.failedCount??0,retryCount:checkpoint?.retryCount??checkpoint?.retryableCount??0,retryableCount:checkpoint?.retryableCount??0,deadLetterCount:checkpoint?.deadLetterCount??0,staleRecovered:checkpoint?.staleRecovered??0,dailyCoverageCount:checkpoint?.dailyCoverageCount??0,weeklyCoverageCount:checkpoint?.weeklyCoverageCount??0,dailyCoveragePercent:checkpoint?.total?Math.round((checkpoint.dailyCoverageCount??0)/checkpoint.total*1000)/10:0,weeklyCoveragePercent:checkpoint?.total?Math.round((checkpoint.weeklyCoverageCount??0)/checkpoint.total*1000)/10:0,lastProgressAt:checkpoint?.lastProgressAt??officialRequest.updatedAt??null,stalled,stalledReason:stalled?'No checkpoint progress for more than 20 minutes':null,lockStatus:lock?'locked':'available',queueFile:join(dataDir,'queue.json'),persistenceStatus,lastError:checkpoint?.lastError??runner.state().error??officialRequest.lastError??null }, scanCount:history.length, dataMode:latest?.provider ?? 'missing', freshness:scanFreshness(latest), release:latest?.release ?? { publish:false, failures:['Official live scan has not completed'] }, coverage:latest?.coverage ?? {total:checkpoint?.total??0,dailyBars:checkpoint?.dailyCoverageCount??0,weeklyBars:checkpoint?.weeklyCoverageCount??0,eligible:0} });
       }
       if (url.pathname.startsWith('/api/')) {
         const error = apiError(404, 'API_ROUTE_NOT_FOUND', `No API route exists for ${url.pathname}`);
@@ -75,7 +79,7 @@ export function createApp({ root = moduleRoot, dataDir = resolve(root, process.e
 export function startServer() {
   const root = moduleRoot;
   const dataDir = resolve(root, process.env.DATA_DIR ?? 'data');
-  const runner = createScanCoordinator({ runBatch:()=>runProductionBatch({dataDir}) });
+  const runner = createScanCoordinator({ runBatch:()=>runProductionBatch({dataDir,refreshUniverse:true}) });
   const server = createApp({ root, dataDir, runner });
   const port = Number(process.env.PORT ?? 8787);
   const host = process.env.HOST ?? '0.0.0.0';

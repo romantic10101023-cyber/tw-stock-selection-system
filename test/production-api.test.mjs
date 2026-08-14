@@ -46,13 +46,18 @@ test('successful scan route returns the production response contract', t => with
 }));
 
 test('health, coverage and unknown API routes always return JSON', t => withServer(t, async ({ base }) => {
-  for (const [path, status] of [[API_ROUTES.health,200],[API_ROUTES.coverage,503],['/api/missing',404]]) {
+  for (const [path, status] of [[API_ROUTES.health,200],[API_ROUTES.coverage,200],['/api/missing',404]]) {
     const response = await fetch(`${base}${path}`);
     assert.equal(response.status, status);
     assert.match(response.headers.get('content-type'), /application\/json/);
     const text = await response.text();
     assert.doesNotThrow(() => JSON.parse(text));
   }
+}));
+
+test('coverage is a valid pending contract before queue creation', t => withServer(t, async ({ base }) => {
+  const response=await fetch(`${base}${API_ROUTES.coverage}`),body=await response.json();
+  assert.equal(response.status,200);assert.equal(body.ok,true);assert.equal(body.historyQueueTotal,0);assert.equal(body.coverage.total,0);assert.match(body.reason,/universe/);
 }));
 
 test('frontend scan path matches the backend route contract', async () => {

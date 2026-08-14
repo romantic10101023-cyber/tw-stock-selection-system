@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 export const BATCH_SIZE = 10;
 export const LEASE_MS = 15 * 60 * 1000;
 export const RETRY_DELAYS_MS = [30_000, 90_000, 180_000];
-export const statePaths = dataDir => ({ queue:join(dataDir,'queue.json'), checkpoint:join(dataDir,'checkpoint.json'), results:join(dataDir,'results.json'), failures:join(dataDir,'failures.json'), lock:join(dataDir,'worker-lock.json') });
+export const statePaths = dataDir => ({ universe:join(dataDir,'universe.json'), queue:join(dataDir,'queue.json'), checkpoint:join(dataDir,'checkpoint.json'), results:join(dataDir,'results.json'), failures:join(dataDir,'failures.json'), lock:join(dataDir,'worker-lock.json') });
 
 export async function readJson(path, fallback) { try { return JSON.parse(await readFile(path,'utf8')); } catch (error) { if (error.code === 'ENOENT' || error instanceof SyntaxError) return fallback; throw error; } }
 export async function atomicWriteJson(path, value) {
