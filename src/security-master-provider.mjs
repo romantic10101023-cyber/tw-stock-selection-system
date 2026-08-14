@@ -6,7 +6,7 @@ export const SECURITY_MASTER_URLS = {
   twse:'https://openapi.twse.com.tw/v1/opendata/t187ap03_L', tpex:'https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O',
   twseCompanyFallback:'https://mopsfin.twse.com.tw/opendata/t187ap03_L.csv', tpexCompanyFallback:'https://mopsfin.twse.com.tw/opendata/t187ap03_O.csv',
   twseProducts:'https://openapi.twse.com.tw/v1/opendata/t187ap47_L', twseProductsFallback:'https://mopsfin.twse.com.tw/opendata/t187ap47_L.csv',
-  tpexProducts:'https://mopsfin.twse.com.tw/opendata/t187ap47_O.csv'
+  tpexProducts:'https://www.tpex.org.tw/openapi/v1/tpex_securities', tpexProductsFallback:'https://mopsfin.twse.com.tw/opendata/t187ap47_O.csv'
 };
 const INDUSTRIES = { '01':'水泥工業','02':'食品工業','03':'塑膠工業','04':'紡織纖維','05':'電機機械','06':'電器電纜','08':'玻璃陶瓷','09':'造紙工業','10':'鋼鐵工業','11':'橡膠工業','12':'汽車工業','14':'建材營造','15':'航運業','16':'觀光餐旅','17':'金融保險','18':'貿易百貨','20':'其他','21':'化學工業','22':'生技醫療','23':'油電燃氣','24':'半導體業','25':'電腦及週邊設備業','26':'光電業','27':'通信網路業','28':'電子零組件業','29':'電子通路業','30':'資訊服務業','31':'其他電子業','32':'數位雲端','33':'居家生活','34':'綠能環保','35':'運動休閒' };
 export const normalizeSecurityCode = value => String(value ?? '').trim().toUpperCase().replace(/[\s-]+/g, '');
@@ -21,7 +21,7 @@ export function parseSecurityMaster(rows = [], market, source=SECURITY_MASTER_UR
   }).filter(([code]) => /^\d{4}$/.test(code)));
 }
 
-export function parseFundMaster(rows=[],market,source){return Object.fromEntries(rows.map(row=>{const code=normalizeSecurityCode(pick(row,'基金代號','FundCode','SecuritiesCompanyCode')),name=String(pick(row,'基金簡稱','FundAbbreviation','CompanyName')??'').trim(),fundType=String(pick(row,'基金類型','FundType')??'').trim();return[code,{code,name,market,securityType:'etf',industry:null,isCommonStock:false,isEtf:true,isFund:true,isEtn:false,isReit:false,isWarrant:false,isDepositaryReceipt:false,isPreferredShare:false,isFinancial:false,isConstruction:false,classificationSource:source,officialFundType:fundType}];}).filter(([code])=>/^[0-9A-Z]{4,12}$/.test(code)));}
+export function parseFundMaster(rows=[],market,source){return Object.fromEntries(rows.map(row=>{const code=normalizeSecurityCode(pick(row,'基金代號','FundCode','SecuritiesCompanyCode','證券代號')),name=String(pick(row,'基金簡稱','FundAbbreviation','CompanyName','證券名稱')??'').trim(),fundType=String(pick(row,'基金類型','FundType')??'').trim();return[code,{code,name,market,securityType:'etf',industry:null,isCommonStock:false,isEtf:true,isFund:true,isEtn:false,isReit:false,isWarrant:false,isDepositaryReceipt:false,isPreferredShare:false,isFinancial:false,isConstruction:false,classificationSource:source,officialFundType:fundType}];}).filter(([code])=>/^[0-9A-Z]{4,12}$/.test(code)));}
 
 async function fetchRows(endpoints,{logger=console,label}={}){const errors=[];for(const endpoint of endpoints){try{const rows=endpoint.format==='csv'?parseOfficialCsv(await fetchOfficialText(endpoint.url,{attempts:2,retryDelaysMs:[30_000]})):await fetchOfficialJson(endpoint.url,{attempts:2,retryDelaysMs:[30_000]});if(!Array.isArray(rows)||!rows.length)throw new Error('official endpoint returned no rows');return{rows,endpoint:endpoint.url};}catch(error){errors.push({endpoint:endpoint.url,error:error.message});logger.error?.(JSON.stringify({event:'universe_endpoint_failed',market:endpoint.market,label,endpoint:endpoint.url,error:error.message}));}}throw Object.assign(new Error(`${label} unavailable from all official endpoints`),{details:errors});}
 
@@ -59,13 +59,14 @@ export async function loadOfficialSecurityMaster({logger=console}={}) {
   const [twseCompanies,tpexCompanies]=marketLoads.map(result=>result.value);
   const productLoads=await Promise.allSettled([
     fetchRows([{url:SECURITY_MASTER_URLS.twseProducts,market:'twse',format:'json'},{url:SECURITY_MASTER_URLS.twseProductsFallback,market:'twse',format:'csv'}],{logger,label:'TWSE fund master'}),
-    fetchRows([{url:SECURITY_MASTER_URLS.tpexProducts,market:'tpex',format:'csv'}],{logger,label:'TPEX fund master'})
+    fetchRows([{url:SECURITY_MASTER_URLS.tpexProducts,market:'tpex',format:'json'},{url:SECURITY_MASTER_URLS.tpexProductsFallback,market:'tpex',format:'csv'}],{logger,label:'TPEX securities master'})
   ]);
   const missingProducts=[];if(productLoads[0].status==='rejected')missingProducts.push({market:'twse',error:productLoads[0].reason.message,details:productLoads[0].reason.details});if(productLoads[1].status==='rejected')missingProducts.push({market:'tpex',error:productLoads[1].reason.message,details:productLoads[1].reason.details});
   if(missingProducts.length)throw Object.assign(new Error(`Official fund classification incomplete: ${missingProducts.map(item=>item.market).join(', ')}`),{missingMarkets:missingProducts});
   const twseFunds=productLoads[0].status==='fulfilled'?productLoads[0].value:{rows:[],endpoint:null},tpexFunds=productLoads[1].status==='fulfilled'?productLoads[1].value:{rows:[],endpoint:null};
   const companies={...parseSecurityMaster(twseCompanies.rows,'twse',twseCompanies.endpoint),...parseSecurityMaster(tpexCompanies.rows,'tpex',tpexCompanies.endpoint)};
-  const products={...parseFundMaster(twseFunds.rows,'twse',twseFunds.endpoint),...parseFundMaster(tpexFunds.rows,'tpex',tpexFunds.endpoint)};
+  const allProducts={...parseFundMaster(twseFunds.rows,'twse',twseFunds.endpoint),...parseFundMaster(tpexFunds.rows,'tpex',tpexFunds.endpoint)};
+  const products=Object.fromEntries(Object.entries(allProducts).filter(([code])=>!companies[code]));
   const sources={twseCompany:twseCompanies.endpoint,tpexCompany:tpexCompanies.endpoint,twseFund:twseFunds.endpoint,tpexFund:tpexFunds.endpoint};
   return {companies,products,sources,marketCounts:{twse:Object.values(companies).filter(item=>item.market==='twse').length,tpex:Object.values(companies).filter(item=>item.market==='tpex').length},officialEtfSymbols:Object.values(products).map(item=>item.code)};
 }
