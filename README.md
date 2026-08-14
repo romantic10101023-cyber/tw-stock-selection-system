@@ -1,5 +1,15 @@
 # Taiwan Stock Selection System v3.0
 
+## 免費官方批次歷史匯入
+
+系統只使用 TWSE `MI_INDEX` 與 TPEX `dailyQuotes` 官方免費收盤批次資料，不使用 Data E-Shop、Yahoo、FinMind、TradingView、第三方 API 或示範資料。Railway API Service 必須掛載既有 Volume 至 `/app/data`，並設定 `DATA_DIR=/app/data`。
+
+首次初始化在 API Service 容器內執行 `npm run bootstrap:official-bulk`。它按交易日及市場保存 raw checkpoint，再以 atomic rename 產生 `/app/data/history/<market>-<code>.json`；中斷後重跑會跳過已完成批次並合併既有有效快取。初始化期間同一把 worker lease 會暫停逐檔 worker。
+
+每日收盤後可一次性執行 `npm run update:official-daily`。這只重新取得當日 TWSE/TPEX 全市場批次、追加去重並重算週線，不重抓 18 個月。非交易日或官方尚未公布時會保留既有快取。
+
+進度由 `/api/health` 與 `/api/coverage` 的 `bulkImportStatus`、`bulkFilesProcessed`、覆蓋率及 `remainingSymbols` 確認。bulk 尚未完整完成時 `/api/scan` 固定回傳 `LIVE_SCAN_PENDING`，不發布 Top 3/Top 12。歷史檔只存在 Railway Volume，不提交 Git。
+
 正式資料只使用 TWSE／TPEX 官方來源。推薦要求至少 120 根有效日線、由日線聚合的 60 根週線、完整核心基本面，以及完整普通股 universe 已完成掃描。
 
 ## Railway API Service

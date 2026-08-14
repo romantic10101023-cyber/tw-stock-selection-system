@@ -1,105 +1,460 @@
-import http from 'node:http';
-import { readFile } from 'node:fs/promises';
-import { extname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { readJson } from './src/storage.mjs';
-import { readLatestScan, scanFreshness } from './src/scan-result.mjs';
-import { API_ROUTES, apiError, scanResponse } from './src/api-contract.mjs';
-import { createScanCoordinator } from './src/scan-coordinator.mjs';
-import { runProductionBatch } from './src/production-batch.mjs';
-import { getOfficialRequestState } from './src/live-provider.mjs';
+import http from "node:http";
+import { readFile } from "node:fs/promises";
+import { extname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { readJson } from "./src/storage.mjs";
+import { readLatestScan, scanFreshness } from "./src/scan-result.mjs";
+import { API_ROUTES, apiError, scanResponse } from "./src/api-contract.mjs";
+import { createScanCoordinator } from "./src/scan-coordinator.mjs";
+import { runProductionBatch } from "./src/production-batch.mjs";
+import { getOfficialRequestState } from "./src/live-provider.mjs";
 
-const moduleRoot = fileURLToPath(new URL('.', import.meta.url));
-const types = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8', '.js':'text/javascript; charset=utf-8' };
+const moduleRoot = fileURLToPath(new URL(".", import.meta.url));
+const types = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+};
 
 function sendJson(res, status, body) {
-  res.writeHead(status, { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store' });
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  });
   res.end(JSON.stringify(body));
 }
 
 function smokeSymbolDiagnostics(queue) {
-  return Object.fromEntries(['2330', '6488'].map((code) => {
-    const item = Array.isArray(queue) ? queue.find((entry) => entry.code === code) : null;
-    return [code, item ? { status:item.status, market:item.market, dailyBars:item.dailyBars??0, weeklyBars:item.weeklyBars??0, attempts:item.attempts??0, lastError:item.lastError??null } : null];
-  }));
+  return Object.fromEntries(
+    ["2330", "6488"].map((code) => {
+      const item = Array.isArray(queue)
+        ? queue.find((entry) => entry.code === code)
+        : null;
+      return [
+        code,
+        item
+          ? {
+              status: item.status,
+              market: item.market,
+              dailyBars: item.dailyBars ?? 0,
+              weeklyBars: item.weeklyBars ?? 0,
+              attempts: item.attempts ?? 0,
+              lastError: item.lastError ?? null,
+            }
+          : null,
+      ];
+    }),
+  );
 }
 
-export function createApp({ root = moduleRoot, dataDir = resolve(root, process.env.DATA_DIR ?? 'data'), runner = createScanCoordinator({ runBatch:()=>runProductionBatch({dataDir}) }), logger = console } = {}) {
+export function createApp({
+  root = moduleRoot,
+  dataDir = resolve(root, process.env.DATA_DIR ?? "data"),
+  runner = createScanCoordinator({
+    runBatch: () => runProductionBatch({ dataDir }),
+  }),
+  logger = console,
+} = {}) {
   return http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://localhost');
+    const url = new URL(req.url, "http://localhost");
     try {
       if (url.pathname === API_ROUTES.scan) {
-        const latest = await readLatestScan(join(dataDir, 'latest-scan.json'));
-        if (latest) return sendJson(res, 200, scanResponse(latest, scanFreshness(latest)));
+        const bulk = await readJson(join(dataDir, "bulk-import.json"), null);
+        if (bulk?.status !== "complete") {
+          const failed = bulk?.status === "failed";
+          const error = apiError(
+            failed ? 503 : 202,
+            failed ? "BULK_IMPORT_FAILED" : "LIVE_SCAN_PENDING",
+            failed
+              ? `Official bulk import failed: ${bulk.lastError}`
+              : "Official bulk history import is not complete; recommendations are disabled",
+            { bulk },
+          );
+          return sendJson(res, error.status, error.body);
+        }
+        const latest = await readLatestScan(join(dataDir, "latest-scan.json"));
+        if (latest)
+          return sendJson(
+            res,
+            200,
+            scanResponse(latest, scanFreshness(latest)),
+          );
         const scan = runner.state();
-        const error = scan.status === 'failed'
-          ? apiError(503, 'LIVE_SCAN_FAILED', 'Official live scan failed; no recommendation data is available', { scan })
-          : apiError(202, 'LIVE_SCAN_PENDING', 'Official live scan is still running; no recommendation data is available yet', { scan });
+        const error =
+          scan.status === "failed"
+            ? apiError(
+                503,
+                "LIVE_SCAN_FAILED",
+                "Official live scan failed; no recommendation data is available",
+                { scan },
+              )
+            : apiError(
+                202,
+                "LIVE_SCAN_PENDING",
+                "Official live scan is still running; no recommendation data is available yet",
+                { scan },
+              );
         return sendJson(res, error.status, error.body);
       }
       if (url.pathname === API_ROUTES.coverage) {
-        const latest = await readLatestScan(join(dataDir, 'latest-scan.json'));
+        const bulk = await readJson(join(dataDir, "bulk-import.json"), null);
+        const bulkCoverage = await readJson(
+          join(dataDir, "coverage.json"),
+          null,
+        );
+        const latest = await readLatestScan(join(dataDir, "latest-scan.json"));
         if (!latest) {
-          const checkpoint = await readJson(join(dataDir, 'checkpoint.json'), null);
-          const snapshot = await readJson(join(dataDir, 'universe.json'), null);
-          const total = checkpoint?.total ?? snapshot?.universe?.included?.length ?? 0;
-          const counts=snapshot?.universe?.counts??{};
-          return sendJson(res, 200, { ok:true, dataSource:'missing', status:'pending', reason:total?'完整普通股歷史仍未掃描完成':'官方 universe 尚未成功建立', universeSourceEndpoint:counts.universeSourceEndpoint??null,twseUniverseCount:counts.twseUniverseCount??0,tpexUniverseCount:counts.tpexUniverseCount??0,queueCreationStatus:snapshot?.queueCreationStatus??'not_created',rawUniverseCount:counts.rawUniverseCount??0, includedCommonStockCount:total,excludedEtfFundCount:counts.excludedEtfFundCount??0,excludedFinancialCount:counts.excludedFinancialCount??0,excludedConstructionCount:counts.excludedConstructionCount??0, historyQueueTotal:total, historyQueueProcessed:checkpoint?.processed??0, historyQueueRemaining:checkpoint?.remaining??total, historySuccessCount:checkpoint?.successCount??0, historyFailureCount:checkpoint?.failedCount??0, historyRetryCount:checkpoint?.retryCount??0, dailyCoverageCount:checkpoint?.dailyCoverageCount??0, weeklyCoverageCount:checkpoint?.weeklyCoverageCount??0, dailyCoveragePercent:checkpoint?.total?Math.round((checkpoint.dailyCoverageCount??0)/checkpoint.total*1000)/10:0, weeklyCoveragePercent:checkpoint?.total?Math.round((checkpoint.weeklyCoverageCount??0)/checkpoint.total*1000)/10:0, queueCheckpoint:checkpoint, coverage:{total,dailyBars:checkpoint?.dailyCoverageCount??0,weeklyBars:checkpoint?.weeklyCoverageCount??0,eligible:0}, insufficientData:[], recommendations:[], scan:runner.state() });
+          const checkpoint = await readJson(
+            join(dataDir, "checkpoint.json"),
+            null,
+          );
+          const snapshot = await readJson(join(dataDir, "universe.json"), null);
+          const total =
+            checkpoint?.total ?? snapshot?.universe?.included?.length ?? 0;
+          const counts = snapshot?.universe?.counts ?? {};
+          return sendJson(res, 200, {
+            ok: true,
+            bulkImportStatus: bulk?.status ?? "not_started",
+            bulk,
+            bulkCoverage,
+            dataSource: "missing",
+            status: "pending",
+            reason: total
+              ? "完整普通股歷史仍未掃描完成"
+              : "官方 universe 尚未成功建立",
+            universeSourceEndpoint: counts.universeSourceEndpoint ?? null,
+            twseUniverseCount: counts.twseUniverseCount ?? 0,
+            tpexUniverseCount: counts.tpexUniverseCount ?? 0,
+            queueCreationStatus: snapshot?.queueCreationStatus ?? "not_created",
+            rawUniverseCount: counts.rawUniverseCount ?? 0,
+            includedCommonStockCount: total,
+            excludedEtfFundCount: counts.excludedEtfFundCount ?? 0,
+            excludedFinancialCount: counts.excludedFinancialCount ?? 0,
+            excludedConstructionCount: counts.excludedConstructionCount ?? 0,
+            historyQueueTotal: total,
+            historyQueueProcessed: checkpoint?.processed ?? 0,
+            historyQueueRemaining: checkpoint?.remaining ?? total,
+            historySuccessCount: checkpoint?.successCount ?? 0,
+            historyFailureCount: checkpoint?.failedCount ?? 0,
+            historyRetryCount: checkpoint?.retryCount ?? 0,
+            dailyCoverageCount:
+              bulkCoverage?.dailyCoverageCount ??
+              checkpoint?.dailyCoverageCount ??
+              0,
+            weeklyCoverageCount:
+              bulkCoverage?.weeklyCoverageCount ??
+              checkpoint?.weeklyCoverageCount ??
+              0,
+            dailyCoveragePercent: checkpoint?.total
+              ? Math.round(
+                  ((checkpoint.dailyCoverageCount ?? 0) / checkpoint.total) *
+                    1000,
+                ) / 10
+              : 0,
+            weeklyCoveragePercent: checkpoint?.total
+              ? Math.round(
+                  ((checkpoint.weeklyCoverageCount ?? 0) / checkpoint.total) *
+                    1000,
+                ) / 10
+              : 0,
+            queueCheckpoint: checkpoint,
+            coverage: {
+              total,
+              dailyBars: checkpoint?.dailyCoverageCount ?? 0,
+              weeklyBars: checkpoint?.weeklyCoverageCount ?? 0,
+              eligible: 0,
+            },
+            insufficientData: [],
+            recommendations: [],
+            scan: runner.state(),
+          });
         }
         const diagnostics = latest.historyDiagnostics ?? {};
         const universe = latest.universe ?? {};
-        const checkpoint = await readJson(join(dataDir, 'checkpoint.json'), null);
-        const total = universe.includedCommonStockCount ?? latest.coverage?.total ?? 0;
-        const daily = latest.coverage?.dailyBars ?? 0, weekly = latest.coverage?.weeklyBars ?? 0;
-        return sendJson(res, 200, { ok:true, dataSource:latest.provider, candidateCount:latest.coverage?.total ?? 0, universeCount:diagnostics.universeCount ?? latest.coverage?.total ?? 0, rawUniverseCount:universe.rawUniverseCount ?? 0, includedCommonStockCount:total, officialEtfCount:universe.officialEtfCount ?? 0, excludedEtfFundCount:universe.excludedEtfFundCount ?? 0, excludedFinancialCount:universe.excludedFinancialCount ?? 0, excludedConstructionCount:universe.excludedConstructionCount ?? 0, excludedOtherSecurityCount:universe.excludedOtherSecurityCount ?? 0, excludedEtfSymbols:universe.excludedEtfSymbols ?? [], excludedEtfNames:universe.excludedEtfNames ?? [], exclusionReasons:universe.exclusionReasons ?? {}, classificationSource:universe.classificationSource ?? [], historyQueueTotal:checkpoint?.total??diagnostics.historyQueueTotal??0, historyQueueProcessed:checkpoint?.processed??diagnostics.historyQueueProcessed??0, historyQueueRemaining:checkpoint?.remaining??diagnostics.historyQueueRemaining??0, historySuccessCount:checkpoint?.successCount??diagnostics.historySuccessCount??0, historyFailureCount:checkpoint?.deadLetterCount??diagnostics.historyFailureCount??0, dailyCoverageCount:checkpoint?.dailyCoverageCount??daily, weeklyCoverageCount:checkpoint?.weeklyCoverageCount??weekly, dailyCoveragePercent:checkpoint?.total?Math.round((checkpoint.dailyCoverageCount??0)/checkpoint.total*1000)/10:0, weeklyCoveragePercent:checkpoint?.total?Math.round((checkpoint.weeklyCoverageCount??0)/checkpoint.total*1000)/10:0, incompleteHistoryReasons:diagnostics.insufficientByReason ?? {}, missingFundamentalFields:latest.coverage?.missingFundamentalFields ?? {}, insufficientData:latest.insufficientData ?? [], insufficientByReason:diagnostics.insufficientByReason ?? {}, historyDiagnostics:diagnostics, queueCheckpoint:checkpoint, lastUpdatedAt:checkpoint?.lastProgressAt ?? latest.runAt, coverage:latest.coverage });
+        const checkpoint = await readJson(
+          join(dataDir, "checkpoint.json"),
+          null,
+        );
+        const total =
+          universe.includedCommonStockCount ?? latest.coverage?.total ?? 0;
+        const daily = latest.coverage?.dailyBars ?? 0,
+          weekly = latest.coverage?.weeklyBars ?? 0;
+        return sendJson(res, 200, {
+          ok: true,
+          bulkImportStatus: bulk?.status ?? "not_started",
+          bulk,
+          bulkCoverage,
+          dataSource: latest.provider,
+          candidateCount: latest.coverage?.total ?? 0,
+          universeCount:
+            diagnostics.universeCount ?? latest.coverage?.total ?? 0,
+          rawUniverseCount: universe.rawUniverseCount ?? 0,
+          includedCommonStockCount: total,
+          officialEtfCount: universe.officialEtfCount ?? 0,
+          excludedEtfFundCount: universe.excludedEtfFundCount ?? 0,
+          excludedFinancialCount: universe.excludedFinancialCount ?? 0,
+          excludedConstructionCount: universe.excludedConstructionCount ?? 0,
+          excludedOtherSecurityCount: universe.excludedOtherSecurityCount ?? 0,
+          excludedEtfSymbols: universe.excludedEtfSymbols ?? [],
+          excludedEtfNames: universe.excludedEtfNames ?? [],
+          exclusionReasons: universe.exclusionReasons ?? {},
+          classificationSource: universe.classificationSource ?? [],
+          historyQueueTotal:
+            checkpoint?.total ?? diagnostics.historyQueueTotal ?? 0,
+          historyQueueProcessed:
+            checkpoint?.processed ?? diagnostics.historyQueueProcessed ?? 0,
+          historyQueueRemaining:
+            checkpoint?.remaining ?? diagnostics.historyQueueRemaining ?? 0,
+          historySuccessCount:
+            checkpoint?.successCount ?? diagnostics.historySuccessCount ?? 0,
+          historyFailureCount:
+            checkpoint?.deadLetterCount ?? diagnostics.historyFailureCount ?? 0,
+          dailyCoverageCount: checkpoint?.dailyCoverageCount ?? daily,
+          weeklyCoverageCount: checkpoint?.weeklyCoverageCount ?? weekly,
+          dailyCoveragePercent: checkpoint?.total
+            ? Math.round(
+                ((checkpoint.dailyCoverageCount ?? 0) / checkpoint.total) *
+                  1000,
+              ) / 10
+            : 0,
+          weeklyCoveragePercent: checkpoint?.total
+            ? Math.round(
+                ((checkpoint.weeklyCoverageCount ?? 0) / checkpoint.total) *
+                  1000,
+              ) / 10
+            : 0,
+          incompleteHistoryReasons: diagnostics.insufficientByReason ?? {},
+          missingFundamentalFields:
+            latest.coverage?.missingFundamentalFields ?? {},
+          insufficientData: latest.insufficientData ?? [],
+          insufficientByReason: diagnostics.insufficientByReason ?? {},
+          historyDiagnostics: diagnostics,
+          queueCheckpoint: checkpoint,
+          lastUpdatedAt: checkpoint?.lastProgressAt ?? latest.runAt,
+          coverage: latest.coverage,
+        });
       }
       if (url.pathname === API_ROUTES.health) {
-        const history = await readJson(join(dataDir, 'scan-history.json'), []);
-        const latest = await readLatestScan(join(dataDir, 'latest-scan.json'));
-        const checkpoint = await readJson(join(dataDir, 'checkpoint.json'), null);
-        const snapshot = await readJson(join(dataDir, 'universe.json'), null);
-        const queue = await readJson(join(dataDir, 'queue.json'), null);
-        const lock = await readJson(join(dataDir, 'worker-lock.json'), null);
-        const persistenceStatus=checkpoint?.persistenceStatus??(process.env.RAILWAY_VOLUME_MOUNT_PATH||process.env.PERSISTENT_STORAGE==='1'?'configured':'not_configured');
-        const lastProgress=checkpoint?.lastProgressAt?new Date(checkpoint.lastProgressAt).getTime():0,stalled=Boolean(checkpoint?.remaining&&lastProgress&&Date.now()-lastProgress>10*60*1000);
-        const officialRequest=getOfficialRequestState();
-        const counts=snapshot?.universe?.counts??{},queueTotal=checkpoint?.total??queue?.length??0;
-        const currentStarted=checkpoint?.currentStockStartedAt?new Date(checkpoint.currentStockStartedAt).getTime():0;
-        return sendJson(res, 200, { ok:true, engine:'v3.0', universe:{sourceEndpoint:counts.universeSourceEndpoint??null,twseCount:counts.twseUniverseCount??0,tpexCount:counts.tpexUniverseCount??0,excludedEtfCount:counts.excludedEtfFundCount??0,excludedFinancialCount:counts.excludedFinancialCount??0,excludedConstructionCount:counts.excludedConstructionCount??0,includedCommonStockCount:counts.includedCommonStockCount??0,queueCreationStatus:snapshot?.queueCreationStatus??'not_created'}, scan:{ ...runner.state(), status:officialRequest.recovering?'recovering':runner.state().status==='idle'?(checkpoint?.status??'idle'):runner.state().status,lastStartedAt:checkpoint?.lastStartedAt??runner.state().startedAt,lastFinishedAt:checkpoint?.lastFinishedAt??runner.state().finishedAt,lastExitCode:checkpoint?.lastExitCode??runner.state().exitCode,currentCode:checkpoint?.currentCode??null,currentStockName:checkpoint?.currentStockName??null,currentEndpoint:checkpoint?.endpoint??officialRequest.endpoint,currentRequestStartedAt:officialRequest.updatedAt??null,currentRetry:checkpoint?.retry??officialRequest.retry,currentStockElapsedSeconds:currentStarted?Math.round((Date.now()-currentStarted)/1000):0,lastCompletedCode:checkpoint?.lastCompletedCode??null,lastCompletedAt:checkpoint?.lastCompletedAt??null,requestAttempts:officialRequest.attempts,requestTimeoutSeconds:officialRequest.timeoutSeconds,currentBatch:checkpoint?.currentBatch??0,batchSize:checkpoint?.batchSize??10,total:queueTotal,processed:checkpoint?.processed??0,remaining:checkpoint?.remaining??queueTotal,successCount:checkpoint?.successCount??0,failedCount:checkpoint?.failedCount??0,retryCount:checkpoint?.retryCount??checkpoint?.retryableCount??0,timeoutCount:checkpoint?.timeoutCount??0,circuitOpen:checkpoint?.circuitOpen??[],retryableCount:checkpoint?.retryableCount??0,deadLetterCount:checkpoint?.deadLetterCount??0,staleRecovered:checkpoint?.staleRecovered??0,dailyCoverageCount:checkpoint?.dailyCoverageCount??0,weeklyCoverageCount:checkpoint?.weeklyCoverageCount??0,dailyCoveragePercent:checkpoint?.total?Math.round((checkpoint.dailyCoverageCount??0)/checkpoint.total*1000)/10:0,weeklyCoveragePercent:checkpoint?.total?Math.round((checkpoint.weeklyCoverageCount??0)/checkpoint.total*1000)/10:0,lastProgressAt:checkpoint?.lastProgressAt??officialRequest.updatedAt??null,stalled,stalledReason:stalled?'No checkpoint or stock completion progress for more than 10 minutes':null,lockStatus:lock?'locked':'available',queueFile:join(dataDir,'queue.json'),persistenceStatus,lastError:checkpoint?.lastError??runner.state().error??officialRequest.lastError??null }, smokeSymbols:smokeSymbolDiagnostics(queue), scanCount:history.length, dataMode:latest?.provider ?? 'missing', freshness:scanFreshness(latest), release:latest?.release ?? { publish:false, failures:['Official live scan has not completed'] }, coverage:latest?.coverage ?? {total:queueTotal,dailyBars:checkpoint?.dailyCoverageCount??0,weeklyBars:checkpoint?.weeklyCoverageCount??0,eligible:0} });
+        const history = await readJson(join(dataDir, "scan-history.json"), []);
+        const latest = await readLatestScan(join(dataDir, "latest-scan.json"));
+        const checkpoint = await readJson(
+          join(dataDir, "checkpoint.json"),
+          null,
+        );
+        const snapshot = await readJson(join(dataDir, "universe.json"), null);
+        const queue = await readJson(join(dataDir, "queue.json"), null);
+        const lock = await readJson(join(dataDir, "worker-lock.json"), null);
+        const bulk = await readJson(join(dataDir, "bulk-import.json"), null);
+        const bulkCoverage = await readJson(
+          join(dataDir, "coverage.json"),
+          null,
+        );
+        const persistenceStatus =
+          checkpoint?.persistenceStatus ??
+          (process.env.RAILWAY_VOLUME_MOUNT_PATH ||
+          process.env.PERSISTENT_STORAGE === "1"
+            ? "configured"
+            : "not_configured");
+        const lastProgress = checkpoint?.lastProgressAt
+            ? new Date(checkpoint.lastProgressAt).getTime()
+            : 0,
+          stalled = Boolean(
+            checkpoint?.remaining &&
+              lastProgress &&
+              Date.now() - lastProgress > 10 * 60 * 1000,
+          );
+        const officialRequest = getOfficialRequestState();
+        const counts = snapshot?.universe?.counts ?? {},
+          queueTotal = checkpoint?.total ?? queue?.length ?? 0;
+        const currentStarted = checkpoint?.currentStockStartedAt
+          ? new Date(checkpoint.currentStockStartedAt).getTime()
+          : 0;
+        return sendJson(res, 200, {
+          ok: true,
+          engine: "v3.0",
+          bulkImportStatus: bulk?.status ?? "not_started",
+          bulkImportStartedAt: bulk?.startedAt ?? null,
+          bulkImportFinishedAt: bulk?.finishedAt ?? null,
+          bulkFilesTotal: bulk?.filesTotal ?? 0,
+          bulkFilesProcessed: bulk?.filesProcessed ?? 0,
+          bulkRowsImported: bulk?.rowsImported ?? 0,
+          bulkSymbolsImported: bulk?.symbolsImported ?? 0,
+          symbolsWith120Daily: bulkCoverage?.dailyCoverageCount ?? 0,
+          symbolsWith60Weekly: bulkCoverage?.weeklyCoverageCount ?? 0,
+          dailyCoveragePercent: bulkCoverage?.dailyCoveragePercent ?? 0,
+          weeklyCoveragePercent: bulkCoverage?.weeklyCoveragePercent ?? 0,
+          cacheReady:
+            bulk?.status === "complete" &&
+            (bulkCoverage?.remainingSymbols ?? 1) === 0,
+          remainingSymbols:
+            bulkCoverage?.remainingSymbols ?? queueTotal ?? 0,
+          lastBulkError: bulk?.lastError ?? null,
+          universe: {
+            sourceEndpoint: counts.universeSourceEndpoint ?? null,
+            twseCount: counts.twseUniverseCount ?? 0,
+            tpexCount: counts.tpexUniverseCount ?? 0,
+            excludedEtfCount: counts.excludedEtfFundCount ?? 0,
+            excludedFinancialCount: counts.excludedFinancialCount ?? 0,
+            excludedConstructionCount: counts.excludedConstructionCount ?? 0,
+            includedCommonStockCount: counts.includedCommonStockCount ?? 0,
+            queueCreationStatus: snapshot?.queueCreationStatus ?? "not_created",
+          },
+          scan: {
+            ...runner.state(),
+            status: officialRequest.recovering
+              ? "recovering"
+              : runner.state().status === "idle"
+                ? (checkpoint?.status ?? "idle")
+                : runner.state().status,
+            lastStartedAt:
+              checkpoint?.lastStartedAt ?? runner.state().startedAt,
+            lastFinishedAt:
+              checkpoint?.lastFinishedAt ?? runner.state().finishedAt,
+            lastExitCode: checkpoint?.lastExitCode ?? runner.state().exitCode,
+            currentCode: checkpoint?.currentCode ?? null,
+            currentStockName: checkpoint?.currentStockName ?? null,
+            currentEndpoint: checkpoint?.endpoint ?? officialRequest.endpoint,
+            currentRequestStartedAt: officialRequest.updatedAt ?? null,
+            currentRetry: checkpoint?.retry ?? officialRequest.retry,
+            currentStockElapsedSeconds: currentStarted
+              ? Math.round((Date.now() - currentStarted) / 1000)
+              : 0,
+            lastCompletedCode: checkpoint?.lastCompletedCode ?? null,
+            lastCompletedAt: checkpoint?.lastCompletedAt ?? null,
+            requestAttempts: officialRequest.attempts,
+            requestTimeoutSeconds: officialRequest.timeoutSeconds,
+            currentBatch: checkpoint?.currentBatch ?? 0,
+            batchSize: checkpoint?.batchSize ?? 10,
+            total: queueTotal,
+            processed: checkpoint?.processed ?? 0,
+            remaining: checkpoint?.remaining ?? queueTotal,
+            successCount: checkpoint?.successCount ?? 0,
+            failedCount: checkpoint?.failedCount ?? 0,
+            retryCount:
+              checkpoint?.retryCount ?? checkpoint?.retryableCount ?? 0,
+            timeoutCount: checkpoint?.timeoutCount ?? 0,
+            circuitOpen: checkpoint?.circuitOpen ?? [],
+            retryableCount: checkpoint?.retryableCount ?? 0,
+            deadLetterCount: checkpoint?.deadLetterCount ?? 0,
+            staleRecovered: checkpoint?.staleRecovered ?? 0,
+            dailyCoverageCount: checkpoint?.dailyCoverageCount ?? 0,
+            weeklyCoverageCount: checkpoint?.weeklyCoverageCount ?? 0,
+            dailyCoveragePercent: checkpoint?.total
+              ? Math.round(
+                  ((checkpoint.dailyCoverageCount ?? 0) / checkpoint.total) *
+                    1000,
+                ) / 10
+              : 0,
+            weeklyCoveragePercent: checkpoint?.total
+              ? Math.round(
+                  ((checkpoint.weeklyCoverageCount ?? 0) / checkpoint.total) *
+                    1000,
+                ) / 10
+              : 0,
+            lastProgressAt:
+              checkpoint?.lastProgressAt ?? officialRequest.updatedAt ?? null,
+            stalled,
+            stalledReason: stalled
+              ? "No checkpoint or stock completion progress for more than 10 minutes"
+              : null,
+            lockStatus: lock ? "locked" : "available",
+            queueFile: join(dataDir, "queue.json"),
+            persistenceStatus,
+            lastError:
+              checkpoint?.lastError ??
+              runner.state().error ??
+              officialRequest.lastError ??
+              null,
+          },
+          smokeSymbols: smokeSymbolDiagnostics(queue),
+          scanCount: history.length,
+          dataMode: latest?.provider ?? "missing",
+          freshness: scanFreshness(latest),
+          release: latest?.release ?? {
+            publish: false,
+            failures: ["Official live scan has not completed"],
+          },
+          coverage: latest?.coverage ?? {
+            total: queueTotal,
+            dailyBars: checkpoint?.dailyCoverageCount ?? 0,
+            weeklyBars: checkpoint?.weeklyCoverageCount ?? 0,
+            eligible: 0,
+          },
+        });
       }
-      if (url.pathname.startsWith('/api/')) {
-        const error = apiError(404, 'API_ROUTE_NOT_FOUND', `No API route exists for ${url.pathname}`);
-        logger.error(JSON.stringify({ event:'api_route_not_found', method:req.method, path:url.pathname }));
+      if (url.pathname.startsWith("/api/")) {
+        const error = apiError(
+          404,
+          "API_ROUTE_NOT_FOUND",
+          `No API route exists for ${url.pathname}`,
+        );
+        logger.error(
+          JSON.stringify({
+            event: "api_route_not_found",
+            method: req.method,
+            path: url.pathname,
+          }),
+        );
         return sendJson(res, error.status, error.body);
       }
-      const relative = url.pathname === '/' ? 'public/index.html' : `public/${url.pathname.replace(/^\//, '')}`;
+      const relative =
+        url.pathname === "/"
+          ? "public/index.html"
+          : `public/${url.pathname.replace(/^\//, "")}`;
       const path = resolve(root, relative);
-      if (!path.startsWith(resolve(root, 'public'))) throw Object.assign(new Error('Invalid static path'), { statusCode:400 });
+      if (!path.startsWith(resolve(root, "public")))
+        throw Object.assign(new Error("Invalid static path"), {
+          statusCode: 400,
+        });
       const data = await readFile(path);
-      res.writeHead(200, { 'content-type':types[extname(path)] || 'application/octet-stream' });
+      res.writeHead(200, {
+        "content-type": types[extname(path)] || "application/octet-stream",
+      });
       return res.end(data);
     } catch (error) {
-      const status = error.code === 'ENOENT' ? 404 : (error.statusCode ?? 500);
-      logger.error(JSON.stringify({ event:'request_failed', method:req.method, path:url.pathname, status, error:error.message, stack:error.stack }));
-      if (url.pathname.startsWith('/api/')) return sendJson(res, status, apiError(status, status === 404 ? 'API_RESOURCE_NOT_FOUND' : 'INTERNAL_SERVER_ERROR', error.message).body);
-      res.writeHead(status, { 'content-type':'text/plain; charset=utf-8' });
-      return res.end(status === 404 ? 'Not found' : 'Internal server error');
+      const status = error.code === "ENOENT" ? 404 : (error.statusCode ?? 500);
+      logger.error(
+        JSON.stringify({
+          event: "request_failed",
+          method: req.method,
+          path: url.pathname,
+          status,
+          error: error.message,
+          stack: error.stack,
+        }),
+      );
+      if (url.pathname.startsWith("/api/"))
+        return sendJson(
+          res,
+          status,
+          apiError(
+            status,
+            status === 404 ? "API_RESOURCE_NOT_FOUND" : "INTERNAL_SERVER_ERROR",
+            error.message,
+          ).body,
+        );
+      res.writeHead(status, { "content-type": "text/plain; charset=utf-8" });
+      return res.end(status === 404 ? "Not found" : "Internal server error");
     }
   });
 }
 
 export function startServer() {
   const root = moduleRoot;
-  const dataDir = resolve(root, process.env.DATA_DIR ?? 'data');
-  const runner = createScanCoordinator({ runBatch:()=>runProductionBatch({dataDir,refreshUniverse:true}) });
+  const dataDir = resolve(root, process.env.DATA_DIR ?? "data");
+  const runner = createScanCoordinator({
+    runBatch: () => runProductionBatch({ dataDir, refreshUniverse: true }),
+  });
   const server = createApp({ root, dataDir, runner });
   const port = Number(process.env.PORT ?? 8787);
-  const host = process.env.HOST ?? '0.0.0.0';
-  server.listen(port, host, () => {
+  const host = process.env.HOST ?? "0.0.0.0";
+  server.listen(port, host, async () => {
     console.log(`TW Stock System: http://${host}:${port}`);
-    if (process.env.AUTO_SCAN === '1') runner.start();
+    const bulk = await readJson(join(dataDir, "bulk-import.json"), null);
+    if (process.env.AUTO_SCAN === "1" && !bulk) runner.start();
   });
   return server;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) startServer();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  startServer();

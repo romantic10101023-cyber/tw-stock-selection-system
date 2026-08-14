@@ -25,6 +25,7 @@ test('scan route returns explicit JSON while official scan is pending', t => wit
 }));
 
 test('successful scan route returns the production response contract', t => withServer(t, async ({ base, dataDir }) => {
+  await writeFile(join(dataDir, 'bulk-import.json'), JSON.stringify({status:'complete'}));
   const scan = { asOf:'2026-08-13', runAt:new Date().toISOString(), provider:'live', validation:{ok:true}, coverage:{total:2,dailyBars:2,weeklyBars:1,eligible:1,details:[]}, historyDiagnostics:{validDailyCount:2,validWeeklyCount:1,insufficientByReason:{'週線不足':1}}, insufficientData:[{code:'2317',dailyBars:300,weeklyBars:59}], ranked:[{code:'2330'}], top3:[{code:'2330'}], top12:[{code:'2330'}], watch:[], release:{publish:true,failures:[]}, marketMode:'bull' };
   await writeFile(join(dataDir, 'latest-scan.json'), JSON.stringify(scan));
   const response = await fetch(`${base}${API_ROUTES.scan}`);

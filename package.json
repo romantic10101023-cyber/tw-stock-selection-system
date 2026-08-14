@@ -6,9 +6,12 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test",
+    "precheck": "node --check src/official-bulk-import.mjs && node --check scripts/bootstrap-official-bulk.js && node --check scripts/update-official-daily.js",
     "check": "node --check server.mjs && node --check public/app.js && node --check src/api-contract.mjs && node --check src/scan-coordinator.mjs && node --check src/production-batch.mjs && node --check src/universe-store.mjs && node --check src/official-csv.mjs && node --check src/security-master-provider.mjs && node --check src/batch-state.mjs && node --check src/batch-worker.mjs && node --check src/history-pipeline.mjs && node --check src/engine.mjs && node --check src/provider.mjs && node --check src/cache-provider.mjs && node --check src/live-provider.mjs && node --check src/factor-provider.mjs && node --check src/factor-loader.mjs && node --check src/enrich.mjs && node --check src/technical.mjs && node --check src/technical-enrich.mjs && node --check src/market-regime.mjs && node --check src/market-provider.mjs && node --check src/universe.mjs && node --check src/market-history.mjs && node --check src/outcome.mjs && node --check src/risk.mjs && node --check src/ohlcv.mjs && node --check src/price-history-provider.mjs && node --check src/tpex-history-provider.mjs && node --check src/history-cache.mjs && node --check src/scan-result.mjs && node --check src/data-coverage.mjs && node --check src/scan-lock.mjs && node --check src/release-gate.mjs && node --check scripts/scan-batch.js && node --check scripts/verify-release.mjs",
     "scan": "node scripts/scan-batch.js",
     "scan:batch": "node scripts/scan-batch.js",
+    "bootstrap:official-bulk": "node scripts/bootstrap-official-bulk.js",
+    "update:official-daily": "node scripts/update-official-daily.js",
     "verify-release": "node scripts/verify-release.mjs"
   }
 }

@@ -18,8 +18,10 @@ import { getOfficialCircuitState } from './live-provider.mjs';
 
 export async function runProductionBatch({dataDir=process.env.DATA_DIR??'data',asOf=process.env.MARKET_DATE??new Date().toISOString().slice(0,10),logger=console,refreshUniverse=false}={}) {
   const cachePath=join(dataDir,'history-cache.json'),symbolCacheDir=join(dataDir,'history-by-symbol');await mkdir(symbolCacheDir,{recursive:true});
+  const bulkHistoryDir=join(dataDir,'history');await mkdir(bulkHistoryDir,{recursive:true});
   const historyCache=await readHistoryCache(cachePath);
   for(const file of await readdir(symbolCacheDir)){if(!file.endsWith('.json'))continue;const code=file.slice(0,-5),payload=await readJson(join(symbolCacheDir,file),null);if(payload?.bars?.length)historyCache[code]=payload;}
+  for(const file of await readdir(bulkHistoryDir)){if(!file.endsWith('.json'))continue;const payload=await readJson(join(bulkHistoryDir,file),null);if(payload?.dailyBars?.length)historyCache[payload.code]={...payload,bars:payload.dailyBars,source:'official-bulk'};}
   const snapshot=await loadUniverseForScan({dataDir,asOf,logger}),universe=snapshot.universe,quotes=snapshot.quotes??[...universe.included,...universe.excluded],paths=statePaths(dataDir);
   const existingQueue=await readJson(paths.queue,createQueue(universe.included));
   let migratedCount=0;
