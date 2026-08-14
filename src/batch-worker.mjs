@@ -24,7 +24,8 @@ export async function runPersistentBatch({ dataDir, stocks, processStock, batchS
     for (const claimedItem of claimed.batch) {
       const index=queue.findIndex(item=>item.code===claimedItem.code);
       const stockStartedAt=now().toISOString();
-      await atomicWriteJson(paths.checkpoint,{...checkpoint,...queueSummary(queue),...diagnostics(),currentBatch:batchNumber,currentCode:claimedItem.code,currentStockName:claimedItem.name,currentStockStartedAt:stockStartedAt,lastProgressAt:stockStartedAt,status:'running',batchSize,persistenceStatus:await persistenceStatus(dataDir)});
+      const progressCheckpoint=await readJson(paths.checkpoint,checkpoint);
+      await atomicWriteJson(paths.checkpoint,{...progressCheckpoint,...queueSummary(queue),...diagnostics(),currentBatch:batchNumber,currentCode:claimedItem.code,currentStockName:claimedItem.name,currentStockStartedAt:stockStartedAt,lastProgressAt:stockStartedAt,status:'running',batchSize,persistenceStatus:await persistenceStatus(dataDir)});
       const controller=new AbortController();
       let rejectDeadline;
       const deadlineError=Object.assign(new Error(`stock processing timeout after ${stockTimeoutMs/1000} seconds`),{stockTimeout:true});
